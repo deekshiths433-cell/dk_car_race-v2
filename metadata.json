@@ -1,0 +1,6 @@
+{
+  "name": "DK Car Race",
+  "description": "High-speed 3D supercar racing game with procedural tracks, realistic vehicle physics, custom garages, and cross-device controls. Created by DEEKSHITH.S.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
