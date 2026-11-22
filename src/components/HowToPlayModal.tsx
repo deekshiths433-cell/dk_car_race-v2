@@ -93,10 +93,10 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({
   ];
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#090b10]/95 flex flex-col">
-      <div className="flex items-center justify-between px-4 md:px-6 py-3.5 border-b border-white/10 bg-[#0b0e16]">
-        <div>
-          <h2 className="font-display text-lg md:text-xl font-bold text-white">
+    <div className="fixed inset-0 z-50 h-dvh w-full bg-[#090b10]/95 flex flex-col overflow-hidden">
+      <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 bg-[#0b0e16] pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 md:py-3.5">
+        <div className="min-w-0">
+          <h2 className="font-display text-base sm:text-lg md:text-xl font-bold text-white leading-tight">
             {isFirstTime ? 'WELCOME TO DK CAR RACE · QUICK TUTORIAL' : 'HOW TO PLAY'}
           </h2>
           <p className="text-xs text-slate-400">
@@ -106,14 +106,16 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({
           </p>
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer"
+          aria-label="Close How to Play"
+          className="w-11 h-11 shrink-0 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer touch-manipulation"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 dk-scroll">
+      <div className="flex-1 min-h-0 dk-scroll p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:p-6">
         <div className="max-w-5xl mx-auto space-y-6">
           {/* Device Quick Summary */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

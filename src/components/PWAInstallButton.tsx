@@ -35,8 +35,8 @@ export const PWAInstallButton: React.FC = () => {
       </button>
 
       {showGuide && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-[#0f1420] border border-white/15 rounded-2xl p-5 sm:p-6 space-y-4">
+        <div className="fixed inset-0 z-50 h-dvh w-full bg-black/80 dk-scroll flex flex-col p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]">
+          <div className="w-full max-w-md my-auto mx-auto bg-[#0f1420] border border-white/15 rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2.5">
                 <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">

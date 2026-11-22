@@ -21,8 +21,8 @@ export const RewardedAdModal: React.FC<RewardedAdModalProps> = ({
   }, [secondsLeft]);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/85 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-[#0f1420] border border-white/15 rounded-2xl p-6 text-center">
+    <div className="fixed inset-0 z-50 h-dvh w-full bg-black/85 dk-scroll flex flex-col p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]">
+      <div className="w-full max-w-md my-auto mx-auto bg-[#0f1420] border border-white/15 rounded-2xl p-5 sm:p-6 text-center">
         <div className="w-12 h-12 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto mb-4">
           <Tv className="w-6 h-6 text-amber-400" />
         </div>

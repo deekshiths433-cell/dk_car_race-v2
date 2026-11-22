@@ -20,8 +20,8 @@ export const PauseModal: React.FC<PauseModalProps> = ({
   onQuitHome,
 }) => {
   return (
-    <div className="fixed inset-0 z-40 bg-black/80 flex items-center justify-center p-4">
-      <div className="w-full max-w-md bg-[#0f1420] border border-white/15 rounded-2xl p-6 space-y-5">
+    <div className="fixed inset-0 z-40 h-dvh w-full bg-black/80 dk-scroll flex flex-col p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]">
+      <div className="w-full max-w-md my-auto mx-auto bg-[#0f1420] border border-white/15 rounded-2xl p-5 sm:p-6 space-y-4 sm:space-y-5">
         <div className="text-center">
           <h2 className="font-display text-2xl font-bold text-white">RACE PAUSED</h2>
           <p className="text-xs text-slate-400 mt-1">Adjust settings or switch controls anytime</p>

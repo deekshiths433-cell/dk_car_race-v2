@@ -86,6 +86,14 @@ export default function App() {
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  // Lock page scrolling strictly while actively racing; menus remain scrollable
+  useEffect(() => {
+    document.documentElement.classList.toggle('dk-in-race', screen === 'race');
+    return () => {
+      document.documentElement.classList.remove('dk-in-race');
+    };
+  }, [screen]);
+
   // Keep game fullscreen and landscape when launched from home screen as installed PWA
   useEffect(() => {
     if (!isRunningAsInstalledPWA()) return;
@@ -273,11 +281,17 @@ export default function App() {
   const selectedCarState = save.cars[save.selectedCarId];
 
   return (
-    <div className="relative w-full h-full overflow-hidden bg-[#090b10]">
+    <div
+      className={
+        screen === 'race'
+          ? 'fixed inset-0 w-full h-dvh overflow-hidden bg-[#090b10]'
+          : 'relative w-full min-h-dvh bg-[#090b10]'
+      }
+    >
       {/* HOME SCREEN & LIVE 3D SHOWROOM */}
       {screen === 'home' && (
         <>
-          <div className="absolute inset-0">
+          <div className="fixed inset-0 z-0 pointer-events-none">
             {activeModal !== 'garage' && activeModal !== 'shop' && activeModal !== 'repair' && (
               <ShowroomCanvas
                 carId={save.selectedCarId}

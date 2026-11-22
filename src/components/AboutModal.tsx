@@ -8,11 +8,13 @@ interface AboutModalProps {
 
 export const AboutModal: React.FC<AboutModalProps> = ({ onClose }) => {
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-[#0f1420] border border-white/15 rounded-2xl p-6 relative">
+    <div className="fixed inset-0 z-50 h-dvh w-full bg-black/80 dk-scroll flex flex-col p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]">
+      <div className="w-full max-w-lg my-auto mx-auto bg-[#0f1420] border border-white/15 rounded-2xl p-5 sm:p-6 relative">
         <button
+          type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer"
+          aria-label="Close About"
+          className="absolute top-4 right-4 w-10 h-10 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer touch-manipulation"
         >
           <X className="w-5 h-5" />
         </button>

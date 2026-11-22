@@ -127,11 +127,11 @@ export const GarageModal: React.FC<GarageModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-40 bg-[#090b10] flex flex-col">
+    <div className="fixed inset-0 z-40 h-dvh w-full bg-[#090b10] flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 md:px-6 py-3 border-b border-white/10 bg-[#0b0e16]">
-        <div>
-          <h2 className="font-display text-lg md:text-xl font-bold text-white">
+      <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 bg-[#0b0e16] pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 md:py-3">
+        <div className="min-w-0">
+          <h2 className="font-display text-base sm:text-lg md:text-xl font-bold text-white leading-tight truncate">
             GARAGE · {spec.brand} {spec.name}
           </h2>
           <p className="text-xs text-slate-400">
@@ -142,30 +142,32 @@ export const GarageModal: React.FC<GarageModalProps> = ({
           </p>
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer"
+          aria-label="Close Garage"
+          className="w-11 h-11 shrink-0 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer touch-manipulation"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      {/* Main Split: 3D Preview + Customization Controls */}
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
-        <div className="lg:col-span-7 h-56 sm:h-72 lg:h-full relative bg-[#090b10]">
+      {/* Main Split: Scrollable unified view on phones, dual pane on desktop */}
+      <div className="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-12 max-lg:dk-scroll">
+        <div className="lg:col-span-7 shrink-0 max-lg:h-[26dvh] max-lg:min-h-[120px] max-lg:max-h-[200px] max-lg:landscape:h-[26dvh] max-lg:landscape:min-h-[88px] max-lg:landscape:max-h-[112px] lg:h-full relative bg-[#090b10]">
           <ShowroomCanvas
             carId={carId}
             customization={c}
             damageBodyPct={carState.damage.body}
           />
-          <div className="absolute bottom-3 left-4 bg-[#0b0e16]/85 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-300 font-mono-num pointer-events-none">
+          <div className="absolute bottom-2 left-3 bg-[#0b0e16]/85 border border-white/10 rounded-lg px-2.5 py-1 text-[11px] sm:text-xs text-slate-300 font-mono-num pointer-events-none">
             Top Speed: {Math.round(spec.stats.topSpeedKmh * (1 + u.engineLevel * 0.018 + u.turboLevel * 0.012))} km/h ·{' '}
             {spec.stats.horsepower + u.engineLevel * 28 + u.turboLevel * 22} HP
           </div>
         </div>
 
-        <div className="lg:col-span-5 flex flex-col min-h-0 border-t lg:border-t-0 lg:border-l border-white/10 bg-[#0d111a]">
+        <div className="lg:col-span-5 flex flex-col lg:min-h-0 border-t lg:border-t-0 lg:border-l border-white/10 bg-[#0d111a]">
           {/* Tabs */}
-          <div className="grid grid-cols-4 gap-1 p-2 border-b border-white/10 bg-[#0b0e16]">
+          <div className="shrink-0 grid grid-cols-4 gap-1 p-2 border-b border-white/10 bg-[#0b0e16] pl-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] lg:pl-2 lg:pr-2">
             {(
               [
                 ['paint', 'Paint'],
@@ -175,9 +177,10 @@ export const GarageModal: React.FC<GarageModalProps> = ({
               ] as const
             ).map(([id, label]) => (
               <button
+                type="button"
                 key={id}
                 onClick={() => setTab(id)}
-                className={`py-2.5 px-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                className={`py-2.5 px-1.5 min-h-[40px] rounded-lg text-xs font-semibold transition-colors cursor-pointer touch-manipulation ${
                   tab === id
                     ? 'bg-amber-500 text-slate-950'
                     : 'bg-slate-900 text-slate-300 hover:text-white'
@@ -189,7 +192,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
           </div>
 
           {/* Tab Content */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-5 dk-scroll">
+          <div className="lg:flex-1 lg:min-h-0 lg:dk-scroll p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] lg:pl-4 lg:pr-4 space-y-5">
             {tab === 'paint' && (
               <>
                 <div>

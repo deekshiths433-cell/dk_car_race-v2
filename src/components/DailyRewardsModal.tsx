@@ -25,10 +25,10 @@ export const DailyRewardsModal: React.FC<DailyRewardsModalProps> = ({
   const nextStreakDay = (save.dailyStreak % 7) + 1;
 
   return (
-    <div className="fixed inset-0 z-40 bg-[#090b10]/95 flex flex-col">
-      <div className="flex items-center justify-between px-4 md:px-6 py-3.5 border-b border-white/10 bg-[#0b0e16]">
-        <div>
-          <h2 className="font-display text-lg md:text-xl font-bold text-white">
+    <div className="fixed inset-0 z-40 h-dvh w-full bg-[#090b10]/95 flex flex-col overflow-hidden">
+      <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 bg-[#0b0e16] pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 md:py-3.5">
+        <div className="min-w-0">
+          <h2 className="font-display text-base sm:text-lg md:text-xl font-bold text-white leading-tight">
             DAILY REWARDS & RANKS
           </h2>
           <p className="text-xs text-slate-400">
@@ -36,14 +36,16 @@ export const DailyRewardsModal: React.FC<DailyRewardsModalProps> = ({
           </p>
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer"
+          aria-label="Close Daily Rewards"
+          className="w-11 h-11 shrink-0 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer touch-manipulation"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="flex gap-2 px-4 md:px-6 py-2.5 border-b border-white/10 bg-[#0d111a]">
+      <div className="shrink-0 flex flex-wrap gap-2 py-2 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 border-b border-white/10 bg-[#0d111a]">
         {(
           [
             ['daily', 'Daily & Missions'],
@@ -52,9 +54,10 @@ export const DailyRewardsModal: React.FC<DailyRewardsModalProps> = ({
           ] as const
         ).map(([id, label]) => (
           <button
+            type="button"
             key={id}
             onClick={() => setTab(id)}
-            className={`px-4 py-2 min-h-[40px] rounded-lg text-xs font-semibold cursor-pointer ${
+            className={`px-3.5 py-2 min-h-[38px] rounded-lg text-xs font-semibold cursor-pointer touch-manipulation ${
               tab === id
                 ? 'bg-amber-500 text-slate-950'
                 : 'bg-slate-900 text-slate-300 hover:text-white'
@@ -65,7 +68,7 @@ export const DailyRewardsModal: React.FC<DailyRewardsModalProps> = ({
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 dk-scroll">
+      <div className="flex-1 min-h-0 dk-scroll p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:p-6">
         <div className="max-w-4xl mx-auto space-y-6">
           {tab === 'daily' && (
             <>
@@ -96,7 +99,7 @@ export const DailyRewardsModal: React.FC<DailyRewardsModalProps> = ({
                   </button>
                 </div>
 
-                <div className="grid grid-cols-7 gap-2">
+                <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
                   {[1, 2, 3, 4, 5, 6, 7].map((day) => {
                     const reward = 250 + day * 150;
                     const done = !canClaimDaily ? day <= ((save.dailyStreak - 1) % 7) + 1 : day < nextStreakDay;

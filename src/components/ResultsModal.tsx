@@ -30,8 +30,8 @@ export const ResultsModal: React.FC<ResultsModalProps> = ({
           : 'th';
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/85 flex items-center justify-center p-4">
-      <div className="w-full max-w-lg bg-[#0f1420] border border-white/15 rounded-2xl p-6 space-y-5">
+    <div className="fixed inset-0 z-40 h-dvh w-full bg-black/85 dk-scroll flex flex-col p-4 pt-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))]">
+      <div className="w-full max-w-lg my-auto mx-auto bg-[#0f1420] border border-white/15 rounded-2xl p-5 sm:p-6 space-y-4 sm:space-y-5">
         <div className="text-center">
           <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-400/30 flex items-center justify-center mx-auto mb-3">
             <Trophy

@@ -42,10 +42,10 @@ export const RepairShopModal: React.FC<RepairShopModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-40 bg-[#090b10] flex flex-col">
-      <div className="flex items-center justify-between px-4 md:px-6 py-3 border-b border-white/10 bg-[#0b0e16]">
-        <div>
-          <h2 className="font-display text-lg md:text-xl font-bold text-white">
+    <div className="fixed inset-0 z-40 h-dvh w-full bg-[#090b10] flex flex-col overflow-hidden">
+      <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 bg-[#0b0e16] pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 md:py-3">
+        <div className="min-w-0">
+          <h2 className="font-display text-base sm:text-lg md:text-xl font-bold text-white leading-tight truncate">
             REPAIR SHOP · {spec.brand} {spec.name}
           </h2>
           <p className="text-xs text-slate-400">
@@ -56,32 +56,36 @@ export const RepairShopModal: React.FC<RepairShopModalProps> = ({
           </p>
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer"
+          aria-label="Close Repair Shop"
+          className="w-11 h-11 shrink-0 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer touch-manipulation"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12">
-        <div className="lg:col-span-7 h-56 sm:h-72 lg:h-full relative bg-[#090b10]">
+      <div className="flex-1 min-h-0 flex flex-col lg:grid lg:grid-cols-12 max-lg:dk-scroll">
+        <div className="lg:col-span-7 shrink-0 max-lg:h-[26dvh] max-lg:min-h-[120px] max-lg:max-h-[200px] max-lg:landscape:h-[26dvh] max-lg:landscape:min-h-[88px] max-lg:landscape:max-h-[112px] lg:h-full relative bg-[#090b10]">
           <ShowroomCanvas
             carId={carId}
             customization={carState.customization}
             damageBodyPct={previewAfter ? 0 : carState.damage.body}
           />
-          <div className="absolute top-3 left-4 flex items-center gap-1 bg-[#0b0e16]/90 border border-white/10 rounded-lg p-1">
+          <div className="absolute top-2.5 left-3 flex items-center gap-1 bg-[#0b0e16]/90 border border-white/10 rounded-lg p-1">
             <button
+              type="button"
               onClick={() => setPreviewAfter(false)}
-              className={`px-3 py-1.5 rounded text-xs font-semibold cursor-pointer ${
+              className={`px-2.5 py-1 rounded text-[11px] sm:text-xs font-semibold cursor-pointer touch-manipulation ${
                 !previewAfter ? 'bg-amber-500 text-slate-950' : 'text-slate-300'
               }`}
             >
               Current ({damagePct}% DMG)
             </button>
             <button
+              type="button"
               onClick={() => setPreviewAfter(true)}
-              className={`px-3 py-1.5 rounded text-xs font-semibold cursor-pointer ${
+              className={`px-2.5 py-1 rounded text-[11px] sm:text-xs font-semibold cursor-pointer touch-manipulation ${
                 previewAfter ? 'bg-emerald-500 text-slate-950' : 'text-slate-300'
               }`}
             >
@@ -90,7 +94,7 @@ export const RepairShopModal: React.FC<RepairShopModalProps> = ({
           </div>
         </div>
 
-        <div className="lg:col-span-5 p-5 overflow-y-auto border-t lg:border-t-0 lg:border-l border-white/10 bg-[#0d111a] flex flex-col justify-between gap-5 dk-scroll">
+        <div className="lg:col-span-5 lg:min-h-0 lg:dk-scroll p-4 sm:p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] lg:pl-5 lg:pr-5 border-t lg:border-t-0 lg:border-l border-white/10 bg-[#0d111a] flex flex-col justify-between gap-5">
           <div className="space-y-4">
             <div className="p-4 rounded-xl bg-slate-900 border border-white/10">
               <div className="flex items-center justify-between mb-2">

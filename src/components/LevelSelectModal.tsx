@@ -18,10 +18,10 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
   const levels = Array.from({ length: totalShown }, (_, i) => getLevelConfig(i + 1));
 
   return (
-    <div className="fixed inset-0 z-40 bg-[#090b10]/95 flex flex-col">
-      <div className="flex items-center justify-between px-4 md:px-6 py-3.5 border-b border-white/10 bg-[#0b0e16]">
-        <div>
-          <h2 className="font-display text-lg md:text-xl font-bold text-white">
+    <div className="fixed inset-0 z-40 h-dvh w-full bg-[#090b10]/95 flex flex-col overflow-hidden">
+      <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 bg-[#0b0e16] pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 md:py-3.5">
+        <div className="min-w-0">
+          <h2 className="font-display text-base sm:text-lg md:text-xl font-bold text-white leading-tight">
             PROCEDURAL CIRCUIT SELECT
           </h2>
           <p className="text-xs text-slate-400">
@@ -29,14 +29,16 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
           </p>
         </div>
         <button
+          type="button"
           onClick={onClose}
-          className="w-11 h-11 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer"
+          aria-label="Close Level Select"
+          className="w-11 h-11 shrink-0 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-white cursor-pointer touch-manipulation"
         >
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 md:p-6 dk-scroll">
+      <div className="flex-1 min-h-0 dk-scroll p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:p-6">
         <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {levels.map((lvl) => {
             const unlocked = lvl.levelNumber <= save.highestUnlockedLevel;
