@@ -15,6 +15,7 @@ import { BIOME_META, getLevelConfig } from '../data/levels';
 import { SaveState } from '../types/game';
 import { getCarDamagePercent } from '../utils/storage';
 import { DkLogo } from './DkLogo';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type ActiveModal =
   | 'none'
@@ -80,13 +81,17 @@ export const HomePage: React.FC<HomePageProps> = ({
           </div>
         </div>
 
-        <button
-          onClick={() => onOpenModal('settings')}
-          className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[40px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-        >
-          <Settings className="w-4 h-4 text-amber-400" />
-          <span>Settings</span>
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <PWAInstallButton />
+          <button
+            type="button"
+            onClick={() => onOpenModal('settings')}
+            className="inline-flex items-center gap-2 px-3.5 py-2 min-h-[40px] rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation"
+          >
+            <Settings className="w-4 h-4 text-amber-400" />
+            <span>Settings</span>
+          </button>
+        </div>
       </header>
 
       {/* Center Left Calm Title Lockup & Primary Play CTA (keeps 3D car unobstructed on right/center) */}

@@ -8,6 +8,7 @@ import { ActiveModal, HomePage } from './components/HomePage';
 import { HowToPlayModal } from './components/HowToPlayModal';
 import { LevelSelectModal } from './components/LevelSelectModal';
 import { PauseModal } from './components/PauseModal';
+import { OfflineIndicator } from './components/PWAInstallButton';
 import { RaceHUD } from './components/RaceHUD';
 import { RepairShopModal } from './components/RepairShopModal';
 import { ResultsModal } from './components/ResultsModal';
@@ -17,6 +18,7 @@ import { CAR_SPECS } from './data/cars';
 import { getLevelConfig } from './data/levels';
 import { ExternalControlInput, RaceEngine } from './engine/RaceEngine';
 import { ShowroomCanvas } from './engine/ShowroomCanvas';
+import { isRunningAsInstalledPWA } from './hooks/usePWAInstall';
 import {
   CarCustomization,
   CarId,
@@ -83,6 +85,28 @@ export default function App() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  // Keep game fullscreen and landscape when launched from home screen as installed PWA
+  useEffect(() => {
+    if (!isRunningAsInstalledPWA()) return;
+    const lockLandscapeFullscreen = () => {
+      try {
+        const orient = screenOrientation();
+        orient?.lock?.('landscape').catch(() => {});
+        const el = document.documentElement;
+        if (isMobile && !document.fullscreenElement && el.requestFullscreen) {
+          el.requestFullscreen().catch(() => {});
+        }
+      } catch {
+        // Ignore browser permission restrictions
+      }
+    };
+    lockLandscapeFullscreen();
+    window.addEventListener('pointerdown', lockLandscapeFullscreen, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', lockLandscapeFullscreen);
+    };
+  }, [isMobile]);
 
   const updateSave = useCallback((updater: (prev: SaveState) => SaveState) => {
     setSave((prev) => updater(prev));
@@ -620,6 +644,8 @@ export default function App() {
           }}
         />
       )}
+
+      <OfflineIndicator />
     </div>
   );
 }
