@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { BiomeType, LevelConfig } from '../types/game';
 import {
+  createSeededRng,
+  generateTrackLayout,
+  TrackSample,
+} from '../utils/trackLayout';
+import {
   getAsphaltRoughnessTexture,
   getAsphaltTexture,
   getCheckeredLineTexture,
@@ -8,13 +13,7 @@ import {
   getFinishBannerTexture,
 } from './ProceduralTextures';
 
-export interface TrackSample {
-  point: THREE.Vector3;
-  tangent: THREE.Vector3;
-  right: THREE.Vector3;
-  t: number;
-  distance: number;
-}
+export type { TrackSample };
 
 export interface TrackObstacle {
   position: THREE.Vector3;
@@ -44,30 +43,22 @@ export interface GeneratedTrack {
   getNearestSample: (pos: THREE.Vector3, hintIndex?: number) => { sample: TrackSample; index: number; lateralOffset: number; distSq: number };
 }
 
-// Deterministic seeded PRNG
-function createRng(seed: number) {
-  let s = seed % 2147483647;
-  if (s <= 0) s += 2147483646;
-  return () => {
-    s = (s * 16807) % 2147483647;
-    return (s - 1) / 2147483646;
-  };
-}
-
 function buildRibbonGeometry(
   samples: TrackSample[],
+  totalLength: number,
   halfWidthInner: number,
   halfWidthOuter: number,
   yOffset: number,
   uvScaleZ: number
 ): THREE.BufferGeometry {
   const count = samples.length;
-  const positions = new Float32Array(count * 2 * 3);
-  const uvs = new Float32Array(count * 2 * 2);
+  const ringCount = count + 1;
+  const positions = new Float32Array(ringCount * 2 * 3);
+  const uvs = new Float32Array(ringCount * 2 * 2);
   const indices: number[] = [];
 
-  for (let i = 0; i < count; i++) {
-    const s = samples[i];
+  for (let i = 0; i < ringCount; i++) {
+    const s = samples[i % count];
     const pL = s.point.clone().addScaledVector(s.right, halfWidthInner);
     const pR = s.point.clone().addScaledVector(s.right, halfWidthOuter);
     pL.y += yOffset;
@@ -82,13 +73,14 @@ function buildRibbonGeometry(
     positions[vi + 5] = pR.z;
 
     const ui = i * 4;
-    const vCoord = (s.distance / uvScaleZ);
+    const dist = i === count ? totalLength : s.distance;
+    const vCoord = dist / uvScaleZ;
     uvs[ui] = 0;
     uvs[ui + 1] = vCoord;
     uvs[ui + 2] = 1;
     uvs[ui + 3] = vCoord;
 
-    if (i < count - 1) {
+    if (i < ringCount - 1) {
       const a = i * 2;
       const b = a + 1;
       const c = a + 2;
@@ -128,66 +120,13 @@ export function generateProceduralTrack(
   propBudgetMultiplier = 1.0,
   maxAniso = 8
 ): GeneratedTrack {
-  const rng = createRng(level.seed);
+  const rng = createSeededRng(level.seed);
   const group = new THREE.Group();
-  const roadWidth = 15.5;
+  const layout = generateTrackLayout(level);
+  const { curve, samples, totalLength, roadWidth, minimapPoints, minimapBounds } = layout;
   const halfRoad = roadWidth * 0.5;
-
-  // 1. Control points for closed organic racing circuit
-  const controlCount = 16;
-  const baseRadius = level.trackLengthMeters / (Math.PI * 2);
-  const controlPoints: THREE.Vector3[] = [];
-  const phaseA = rng() * Math.PI * 2;
-  const phaseB = rng() * Math.PI * 2;
-
-  for (let i = 0; i < controlCount; i++) {
-    const angle = (i / controlCount) * Math.PI * 2;
-    // Keep start straight smooth around angle ~ 0
-    const straightMask = Math.min(1, Math.abs(Math.sin(angle * 0.5)) * 2.2);
-    const wave =
-      Math.sin(angle * 3 + phaseA) * 0.24 * level.trackCurviness +
-      Math.cos(angle * 5 + phaseB) * 0.14 * level.trackCurviness;
-    const r = baseRadius * (1 + wave * straightMask);
-    const elev =
-      level.biome === 'mountain'
-        ? Math.sin(angle * 2 + phaseA) * 7.5 * straightMask
-        : level.biome === 'coastal' || level.biome === 'desert'
-          ? Math.sin(angle * 3) * 2.2 * straightMask
-          : 0;
-
-    controlPoints.push(
-      new THREE.Vector3(Math.cos(angle) * r, Math.max(0, elev), Math.sin(angle) * r)
-    );
-  }
-
-  const curve = new THREE.CatmullRomCurve3(controlPoints, true, 'catmullrom', 0.5);
-  const totalLength = curve.getLength();
-  const sampleCount = 360;
-  const samples: TrackSample[] = [];
-  const up = new THREE.Vector3(0, 1, 0);
-
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minZ = Infinity;
-  let maxZ = -Infinity;
-
-  for (let i = 0; i <= sampleCount; i++) {
-    const t = i / sampleCount;
-    const point = curve.getPointAt(t % 1);
-    const tangent = curve.getTangentAt(t % 1).normalize();
-    const right = new THREE.Vector3().crossVectors(tangent, up).normalize();
-    samples.push({
-      point,
-      tangent,
-      right,
-      t,
-      distance: t * totalLength,
-    });
-    if (point.x < minX) minX = point.x;
-    if (point.x > maxX) maxX = point.x;
-    if (point.z < minZ) minZ = point.z;
-    if (point.z > maxZ) maxZ = point.z;
-  }
+  const sampleCount = samples.length;
+  const { minX, maxX, minZ, maxZ } = minimapBounds;
 
   // 2. Ground terrain extending far to horizon (prevents floating box void)
   const terrainSize = Math.max(2400, totalLength * 1.4);
@@ -231,7 +170,7 @@ export function generateProceduralTrack(
     roughness: isWet ? 0.32 : 0.85,
     metalness: isWet ? 0.22 : 0.05,
   });
-  const roadGeo = buildRibbonGeometry(samples, -halfRoad, halfRoad, 0.03, 14);
+  const roadGeo = buildRibbonGeometry(samples, totalLength, -halfRoad, halfRoad, 0.03, 14);
   const roadMesh = new THREE.Mesh(roadGeo, roadMat);
   roadMesh.receiveShadow = true;
   group.add(roadMesh);
@@ -242,11 +181,11 @@ export function generateProceduralTrack(
     roughness: 0.72,
   });
   const leftCurb = new THREE.Mesh(
-    buildRibbonGeometry(samples, -halfRoad - 1.1, -halfRoad, 0.05, 8),
+    buildRibbonGeometry(samples, totalLength, -halfRoad - 1.1, -halfRoad, 0.05, 8),
     curbMat
   );
   const rightCurb = new THREE.Mesh(
-    buildRibbonGeometry(samples, halfRoad, halfRoad + 1.1, 0.05, 8),
+    buildRibbonGeometry(samples, totalLength, halfRoad, halfRoad + 1.1, 0.05, 8),
     curbMat
   );
   leftCurb.receiveShadow = true;
@@ -260,11 +199,11 @@ export function generateProceduralTrack(
     roughness: 0.35,
   });
   const leftRail = new THREE.Mesh(
-    buildRibbonGeometry(samples, -halfRoad - 1.85, -halfRoad - 1.55, 0.55, 10),
+    buildRibbonGeometry(samples, totalLength, -halfRoad - 1.85, -halfRoad - 1.55, 0.55, 10),
     railMat
   );
   const rightRail = new THREE.Mesh(
-    buildRibbonGeometry(samples, halfRoad + 1.55, halfRoad + 1.85, 0.55, 10),
+    buildRibbonGeometry(samples, totalLength, halfRoad + 1.55, halfRoad + 1.85, 0.55, 10),
     railMat
   );
   group.add(leftRail, rightRail);
@@ -361,12 +300,6 @@ export function generateProceduralTrack(
 
   // 9. Instanced Environment Scenery (buildings, trees, canyons, streetlights, crowds)
   populateBiomeProps(group, level, samples, halfRoad, rng, propBudgetMultiplier);
-
-  // Minimap point array
-  const minimapPoints: { x: number; z: number }[] = [];
-  for (let i = 0; i < sampleCount; i += 3) {
-    minimapPoints.push({ x: samples[i].point.x, z: samples[i].point.z });
-  }
 
   const getNearestSample = (pos: THREE.Vector3, hintIndex?: number) => {
     let bestIdx = 0;

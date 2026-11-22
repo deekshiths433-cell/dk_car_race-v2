@@ -290,6 +290,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="p-4 rounded-xl bg-[#0f1420] border border-white/10 flex items-center justify-between gap-4">
                 <div>
                   <div className="text-sm font-semibold text-white">
+                    Personal Best Ghost Car
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Race against a semi-transparent ghost of your best leaderboard time on each level
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onChange({ showGhost: !(settings.showGhost !== false) })}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold cursor-pointer touch-manipulation ${
+                    settings.showGhost !== false
+                      ? 'bg-cyan-400 text-slate-950'
+                      : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  {settings.showGhost !== false ? 'ENABLED' : 'DISABLED'}
+                </button>
+              </div>
+
+              <div className="p-4 rounded-xl bg-[#0f1420] border border-white/10 flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-semibold text-white">
                     Mouse Horizontal Steering (Desktop)
                   </div>
                   <div className="text-xs text-slate-400">

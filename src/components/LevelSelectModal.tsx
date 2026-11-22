@@ -1,21 +1,26 @@
 import React from 'react';
-import { Lock, Play, X } from 'lucide-react';
+import { Bookmark, Lock, Play, Shuffle, Trash2, X } from 'lucide-react';
 import { BIOME_META, getLevelConfig, PRESET_LEVEL_COUNT } from '../data/levels';
-import { SaveState } from '../types/game';
+import { FavoriteMapSeed, SaveState } from '../types/game';
 
 interface LevelSelectModalProps {
   save: SaveState;
   onSelectAndPlay: (levelNumber: number) => void;
+  onReplayFavorite: (favorite: FavoriteMapSeed) => void;
+  onRemoveFavorite: (seed: number) => void;
   onClose: () => void;
 }
 
 export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
   save,
   onSelectAndPlay,
+  onReplayFavorite,
+  onRemoveFavorite,
   onClose,
 }) => {
   const totalShown = Math.max(PRESET_LEVEL_COUNT, save.highestUnlockedLevel + 1);
   const levels = Array.from({ length: totalShown }, (_, i) => getLevelConfig(i + 1));
+  const favorites = save.favoriteMaps ?? [];
 
   return (
     <div className="fixed inset-0 z-40 h-dvh w-full bg-[#090b10]/95 flex flex-col overflow-hidden">
@@ -25,7 +30,7 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
             PROCEDURAL CIRCUIT SELECT
           </h2>
           <p className="text-xs text-slate-400">
-            Every race generates a fresh spline circuit · Difficulty & rival skill scale each level
+            Every race generates a new map · Difficulty scales by level · Replay saved seeds below
           </p>
         </div>
         <button
@@ -39,71 +44,150 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
       </div>
 
       <div className="flex-1 min-h-0 dk-scroll p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:p-6">
-        <div className="max-w-6xl mx-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {levels.map((lvl) => {
-            const unlocked = lvl.levelNumber <= save.highestUnlockedLevel;
-            const biome = BIOME_META[lvl.biome];
-            const bestTime = save.bestTimesByLevel[lvl.levelNumber];
-            const isCurrent = save.currentLevel === lvl.levelNumber;
-
-            return (
-              <div
-                key={lvl.levelNumber}
-                className={`rounded-xl border p-4 flex flex-col justify-between gap-4 ${
-                  isCurrent
-                    ? 'bg-amber-500/10 border-amber-400'
-                    : unlocked
-                      ? 'bg-[#0f1420] border-white/10'
-                      : 'bg-slate-900/40 border-white/5 opacity-60'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span
-                      className="text-xs font-bold uppercase tracking-wider"
-                      style={{ color: biome.accent }}
-                    >
-                      Level {lvl.levelNumber} · {biome.label}
-                    </span>
-                    <span className="text-[11px] text-slate-400 capitalize">
-                      {lvl.timeOfDay} · {lvl.weather}
-                    </span>
-                  </div>
-                  <h3 className="font-display text-lg font-bold text-white mb-1">
-                    {lvl.name}
-                  </h3>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    {lvl.description}
-                  </p>
-                </div>
-
-                <div className="pt-3 border-t border-white/10 flex items-center justify-between gap-2">
-                  <div className="text-[11px] text-slate-300 font-mono-num">
-                    {bestTime ? (
-                      <span>Best: {bestTime.toFixed(2)}s</span>
-                    ) : (
-                      <span>Reward: +{lvl.baseReward} pts</span>
-                    )}
-                  </div>
-
-                  {unlocked ? (
-                    <button
-                      onClick={() => onSelectAndPlay(lvl.levelNumber)}
-                      className="px-4 py-2 min-h-[40px] rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-display font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Play className="w-3.5 h-3.5 fill-current" />
-                      <span>RACE</span>
-                    </button>
-                  ) : (
-                    <div className="inline-flex items-center gap-1.5 text-xs text-slate-400 font-semibold">
-                      <Lock className="w-3.5 h-3.5" />
-                      <span>Finish Top 3 in Lv {lvl.levelNumber - 1}</span>
-                    </div>
-                  )}
-                </div>
+        <div className="max-w-6xl mx-auto space-y-6">
+          {/* Favorite Saved Seeds Section */}
+          <section className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Bookmark className="w-4 h-4 text-amber-400 fill-current" />
+                <h3 className="font-display text-sm sm:text-base font-bold text-white uppercase tracking-wide">
+                  Favorite Maps (Seed Replay)
+                </h3>
               </div>
-            );
-          })}
+              <span className="text-xs text-slate-400 font-mono-num">
+                {favorites.length} saved
+              </span>
+            </div>
+
+            {favorites.length === 0 ? (
+              <div className="rounded-xl border border-white/10 bg-[#0f1420]/70 px-4 py-3 text-xs text-slate-400">
+                No saved favorite maps yet. Tap <span className="text-amber-300 font-semibold">Save Seed</span> on the Race Intro or Results screen to replay any favorite circuit anytime.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {favorites.map((fav) => {
+                  const biome = BIOME_META[fav.biome];
+                  return (
+                    <div
+                      key={fav.seed}
+                      className="rounded-xl border border-amber-400/35 bg-[#0f1420] p-3.5 flex flex-col justify-between gap-3"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2 text-[11px] mb-1">
+                          <span
+                            className="font-bold uppercase tracking-wider"
+                            style={{ color: biome.accent }}
+                          >
+                            {biome.label}
+                          </span>
+                          <span className="font-mono-num text-slate-400">#{fav.seed}</span>
+                        </div>
+                        <div className="font-display text-base font-bold text-white leading-tight">
+                          {fav.name}
+                        </div>
+                        <div className="text-[11px] text-slate-400 capitalize mt-0.5">
+                          {fav.timeOfDay} · {fav.weather} · {fav.layoutArchetype}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-2 pt-2 border-t border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => onRemoveFavorite(fav.seed)}
+                          aria-label={`Delete saved map ${fav.name}`}
+                          className="inline-flex items-center justify-center w-10 h-10 rounded-lg bg-slate-800 hover:bg-red-950/70 text-slate-400 hover:text-red-300 transition-colors cursor-pointer touch-manipulation"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onReplayFavorite(fav)}
+                          className="flex-1 px-3.5 py-2 min-h-[40px] rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-display font-bold text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer touch-manipulation"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current" />
+                          <span>REPLAY SEED</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* Progressive Levels Grid */}
+          <section className="space-y-2.5">
+            <h3 className="font-display text-sm sm:text-base font-bold text-white uppercase tracking-wide">
+              Championship Levels
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {levels.map((lvl) => {
+                const unlocked = lvl.levelNumber <= save.highestUnlockedLevel;
+                const biome = BIOME_META[lvl.biome];
+                const bestTime = save.bestTimesByLevel[lvl.levelNumber];
+                const isCurrent = save.currentLevel === lvl.levelNumber;
+
+                return (
+                  <div
+                    key={lvl.levelNumber}
+                    className={`rounded-xl border p-4 flex flex-col justify-between gap-4 ${
+                      isCurrent
+                        ? 'bg-amber-500/10 border-amber-400'
+                        : unlocked
+                          ? 'bg-[#0f1420] border-white/10'
+                          : 'bg-slate-900/40 border-white/5 opacity-60'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span
+                          className="text-xs font-bold uppercase tracking-wider"
+                          style={{ color: biome.accent }}
+                        >
+                          Level {lvl.levelNumber} · {lvl.rivalCount} Rivals
+                        </span>
+                        <span className="text-[11px] text-slate-400 font-mono-num">
+                          {lvl.laps} Laps · {(lvl.trackLengthMeters / 1000).toFixed(1)} km
+                        </span>
+                      </div>
+                      <h3 className="font-display text-lg font-bold text-white mb-1">
+                        Random {biome.label} Rotation
+                      </h3>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        AI Pace {Math.round(lvl.rivalSkill * 100)}% · Curviness {Math.round(lvl.trackCurviness * 100)}% · Generates a brand-new map & weather on every launch.
+                      </p>
+                    </div>
+
+                    <div className="pt-3 border-t border-white/10 flex items-center justify-between gap-2">
+                      <div className="text-[11px] text-slate-300 font-mono-num">
+                        {bestTime ? (
+                          <span>Best: {bestTime.toFixed(2)}s</span>
+                        ) : (
+                          <span>Reward: +{lvl.baseReward} pts</span>
+                        )}
+                      </div>
+
+                      {unlocked ? (
+                        <button
+                          type="button"
+                          onClick={() => onSelectAndPlay(lvl.levelNumber)}
+                          className="px-4 py-2 min-h-[40px] rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-display font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer touch-manipulation"
+                        >
+                          <Shuffle className="w-3.5 h-3.5" />
+                          <span>NEW MAP</span>
+                        </button>
+                      ) : (
+                        <div className="inline-flex items-center gap-1.5 text-xs text-slate-400 font-semibold">
+                          <Lock className="w-3.5 h-3.5" />
+                          <span>Finish Top 3 in Lv {lvl.levelNumber - 1}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
         </div>
       </div>
     </div>

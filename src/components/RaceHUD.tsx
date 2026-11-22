@@ -128,7 +128,7 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    const { trackPoints, bounds, player, rivals } = telemetry.minimapData;
+    const { trackPoints, bounds, player, rivals, ghost } = telemetry.minimapData;
     const pad = 16;
     const spanX = Math.max(10, bounds.maxX - bounds.minX);
     const spanZ = Math.max(10, bounds.maxZ - bounds.minZ);
@@ -149,6 +149,19 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
         else ctx.lineTo(toX(pt.x), toY(pt.z));
       });
       ctx.closePath();
+      ctx.stroke();
+    }
+
+    // Personal-Best Ghost marker
+    if (ghost) {
+      const gx = toX(ghost.x);
+      const gy = toY(ghost.z);
+      ctx.fillStyle = 'rgba(103, 232, 249, 0.35)';
+      ctx.strokeStyle = 'rgba(186, 230, 253, 0.95)';
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(gx, gy, 4.6, 0, Math.PI * 2);
+      ctx.fill();
       ctx.stroke();
     }
 
@@ -600,7 +613,10 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                   </div>
                   <div className="font-display font-bold text-[clamp(1rem,2.6vw,1.5rem)] text-amber-400 font-mono-num leading-none">
                     {telemetry.position}
-                    <span className="text-[11px] sm:text-xs text-slate-400">/{telemetry.totalCars}</span>
+                    <span className="text-[11px] sm:text-xs text-slate-400">
+                      {' '}
+                      / {telemetry.totalCars}
+                    </span>
                   </div>
                 </div>
               )}
@@ -628,6 +644,32 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                       {formatTime(telemetry.raceTimeSec)}
                     </div>
                   </div>
+                  {telemetry.ghostBestTimeSec !== null && (
+                    <>
+                      <div className="h-[clamp(1.25rem,3vh,1.75rem)] w-px bg-white/15" />
+                      <div>
+                        <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-cyan-300 leading-none mb-0.5">
+                          PB Ghost
+                        </div>
+                        {telemetry.ghostDeltaSec !== null ? (
+                          <div
+                            className={`font-mono-num font-bold text-[clamp(0.72rem,1.8vw,0.95rem)] leading-none ${
+                              telemetry.ghostDeltaSec <= 0
+                                ? 'text-emerald-400'
+                                : 'text-rose-400'
+                            }`}
+                          >
+                            {telemetry.ghostDeltaSec <= 0 ? '' : '+'}
+                            {telemetry.ghostDeltaSec.toFixed(2)}s
+                          </div>
+                        ) : (
+                          <div className="font-mono-num font-semibold text-[clamp(0.72rem,1.8vw,0.95rem)] text-cyan-200 leading-none">
+                            {formatTime(telemetry.ghostBestTimeSec)}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>

@@ -42,6 +42,7 @@ export interface BuiltCarRig {
   cockpitCameraAnchor: THREE.Object3D;
   hoodCameraAnchor: THREE.Object3D;
   rearMirrorAnchor: THREE.Object3D;
+  ghostMaterials?: { material: THREE.Material; baseOpacity: number }[];
 }
 
 function createPaintMaterial(colorHex: string, finish: PaintFinish): THREE.MeshPhysicalMaterial {
@@ -325,7 +326,7 @@ function createSculptedChassisGeometry(carId: CarId, length: number, width: numb
 export function buildSupercarModel(
   carId: CarId,
   customization: CarCustomization,
-  options: { enableSpotLights?: boolean; isPlayer?: boolean } = {}
+  options: { enableSpotLights?: boolean; isPlayer?: boolean; isGhost?: boolean } = {}
 ): BuiltCarRig {
   const spec = CAR_SPECS[carId];
   const { length, width, height } = spec.silhouette;
@@ -362,7 +363,7 @@ export function buildSupercarModel(
     depthWrite: false,
   });
 
-  // 1. Contact shadow beneath car
+  // 1. Contact shadow beneath car (omitted for ghost car)
   const shadowPlane = new THREE.Mesh(
     new THREE.PlaneGeometry(bodyWidth * 1.32, length * 1.18),
     new THREE.MeshBasicMaterial({
@@ -374,7 +375,11 @@ export function buildSupercarModel(
   );
   shadowPlane.rotation.x = -Math.PI / 2;
   shadowPlane.position.y = 0.02;
-  root.add(shadowPlane);
+  if (options.isGhost) {
+    shadowPlane.visible = false;
+  } else {
+    root.add(shadowPlane);
+  }
 
   // 2. Main sculpted primary silhouette body
   const chassisGeo = createSculptedChassisGeometry(carId, length, bodyWidth, height);
@@ -732,6 +737,119 @@ export function buildSupercarModel(
 
   root.add(hoodSmokeOrigin, cockpitCameraAnchor, hoodCameraAnchor, rearMirrorAnchor);
 
+  let ghostMaterials: { material: THREE.Material; baseOpacity: number }[] | undefined;
+
+  if (options.isGhost) {
+    shadowPlane.geometry.dispose();
+    (shadowPlane.material as THREE.Material).dispose();
+    glowStrip.visible = false;
+    damageOverlayMesh.visible = false;
+
+    const ghostBodyMat = new THREE.MeshPhysicalMaterial({
+      color: 0x38bdf8,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.45,
+      metalness: 0.28,
+      roughness: 0.18,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.1,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+    });
+    const ghostAccentMat = new THREE.MeshStandardMaterial({
+      color: 0xbae6fd,
+      emissive: 0x0ea5e9,
+      emissiveIntensity: 0.4,
+      metalness: 0.35,
+      roughness: 0.25,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+    });
+    const ghostGlassMat = new THREE.MeshPhysicalMaterial({
+      color: 0x7dd3fc,
+      emissive: 0x0369a1,
+      emissiveIntensity: 0.25,
+      metalness: 0.1,
+      roughness: 0.08,
+      transparent: true,
+      opacity: 0.24,
+      depthWrite: false,
+    });
+    const ghostHeadlightMat = new THREE.MeshStandardMaterial({
+      color: 0xe0f2fe,
+      emissive: 0xbae6fd,
+      emissiveIntensity: 1.2,
+      transparent: true,
+      opacity: 0.6,
+      depthWrite: false,
+    });
+    const ghostTaillightMat = new THREE.MeshStandardMaterial({
+      color: 0x67e8f9,
+      emissive: 0x22d3ee,
+      emissiveIntensity: 1.4,
+      transparent: true,
+      opacity: 0.62,
+      depthWrite: false,
+    });
+
+    ghostMaterials = [
+      { material: ghostBodyMat, baseOpacity: 0.34 },
+      { material: ghostAccentMat, baseOpacity: 0.42 },
+      { material: ghostGlassMat, baseOpacity: 0.24 },
+      { material: ghostHeadlightMat, baseOpacity: 0.6 },
+      { material: ghostTaillightMat, baseOpacity: 0.62 },
+    ];
+
+    // Dispose unused opaque materials built earlier for the ghost rig
+    const seenOldMats = new Set<THREE.Material>();
+    root.traverse((obj) => {
+      if (!(obj instanceof THREE.Mesh)) return;
+      obj.castShadow = false;
+      obj.receiveShadow = false;
+      if (
+        obj === nitroFlameLeft ||
+        obj === nitroFlameRight ||
+        obj === beamConeLeft ||
+        obj === beamConeRight ||
+        obj === damageOverlayMesh ||
+        obj === glowStrip
+      ) {
+        if (obj === nitroFlameLeft || obj === nitroFlameRight) {
+          obj.renderOrder = 5;
+        }
+        return;
+      }
+
+      obj.renderOrder = 4;
+      const oldMat = obj.material;
+      if (!Array.isArray(oldMat)) {
+        seenOldMats.add(oldMat);
+        if (oldMat === glassMat) {
+          obj.material = ghostGlassMat;
+        } else if (oldMat === headlightMat) {
+          obj.material = ghostHeadlightMat;
+        } else if (oldMat === taillightMat) {
+          obj.material = ghostTaillightMat;
+        } else if (oldMat === bodyPaintMat) {
+          obj.material = ghostBodyMat;
+        } else {
+          obj.material = ghostAccentMat;
+        }
+      }
+    });
+    seenOldMats.forEach((m) => m.dispose());
+
+    // Tint ghost nitro flames holographic cyan-blue
+    const flameMatL = nitroFlameLeft.material as THREE.MeshBasicMaterial;
+    const flameMatR = nitroFlameRight.material as THREE.MeshBasicMaterial;
+    flameMatL.color.setHex(0x67e8f9);
+    flameMatL.opacity = 0.55;
+    flameMatR.color.setHex(0x67e8f9);
+    flameMatR.opacity = 0.55;
+  }
+
   return {
     root,
     bodyPaintMat,
@@ -764,5 +882,6 @@ export function buildSupercarModel(
     cockpitCameraAnchor,
     hoodCameraAnchor,
     rearMirrorAnchor,
+    ghostMaterials,
   };
 }

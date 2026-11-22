@@ -158,10 +158,15 @@ export const HomePage: React.FC<HomePageProps> = ({
             <button
               type="button"
               onClick={onStartRace}
-              className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 min-h-[50px] rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 font-display font-bold text-base tracking-wide transition-all cursor-pointer touch-manipulation"
+              className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 min-h-[50px] rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 font-display font-bold tracking-wide transition-all cursor-pointer touch-manipulation"
             >
               <Play className="w-5 h-5 fill-current shrink-0" />
-              <span>PLAY RACE</span>
+              <span className="flex flex-col items-start leading-none">
+                <span className="text-base">PLAY RACE</span>
+                <span className="text-[10px] font-sans font-bold uppercase tracking-wider text-slate-900/80">
+                  New Map
+                </span>
+              </span>
             </button>
 
             <button
@@ -269,10 +274,15 @@ export const HomePage: React.FC<HomePageProps> = ({
               <button
                 type="button"
                 onClick={onStartRace}
-                className="flex-1 min-w-[155px] inline-flex items-center justify-center gap-2.5 px-6 py-3.5 min-h-[48px] rounded-lg bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 font-display font-bold text-lg tracking-wide transition-all cursor-pointer touch-manipulation"
+                className="flex-1 min-w-[165px] inline-flex items-center justify-center gap-2.5 px-5 py-2.5 min-h-[48px] rounded-lg bg-amber-500 hover:bg-amber-400 active:scale-[0.99] text-slate-950 font-display font-bold tracking-wide transition-all cursor-pointer touch-manipulation"
               >
-                <Play className="w-5 h-5 fill-current" />
-                <span>PLAY RACE</span>
+                <Play className="w-5 h-5 fill-current shrink-0" />
+                <span className="flex flex-col items-start leading-none">
+                  <span className="text-lg">PLAY RACE</span>
+                  <span className="text-[10px] font-sans font-bold uppercase tracking-wider text-slate-900/80">
+                    New Map
+                  </span>
+                </span>
               </button>
 
               <button

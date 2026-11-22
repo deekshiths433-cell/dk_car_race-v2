@@ -3,16 +3,19 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { CAR_ORDER } from '../data/cars';
+import { CAR_ORDER, CAR_SPECS } from '../data/cars';
 import { BIOME_META } from '../data/levels';
 import {
   CameraMode,
   CarId,
   GameSettings,
+  GhostConfig,
+  GhostSample,
   LevelConfig,
   OwnedCarState,
   QualityPreset,
   RaceResult,
+  RaceStanding,
   RaceTelemetry,
 } from '../types/game';
 import { SoundEngine } from '../audio/SoundEngine';
@@ -28,6 +31,17 @@ import {
 } from './PhysicsEngine';
 import { GeneratedTrack, generateProceduralTrack } from './TrackGenerator';
 import { createSafeWebGLRenderer, probeWebGL } from './webglSupport';
+import {
+  buildRaceStandings,
+  calculatePlayerPosition,
+  computePositionPoints,
+} from '../utils/raceStandings';
+import {
+  buildProceduralGhostSamples,
+  downsampleGhostSamples,
+  estimateGhostTimeAtProgress,
+  evaluateGhostPose,
+} from '../utils/ghost';
 
 export interface ExternalControlInput {
   throttle: number;
@@ -77,6 +91,7 @@ export class RaceEngine {
   private sound: SoundEngine;
   private onTelemetry: (t: RaceTelemetry) => void;
   private onFinish: (res: RaceResult) => void;
+  private onStandingsUpdate?: (standings: RaceStanding[]) => void;
   private onPauseRequested: () => void;
 
   private cameraMode: CameraMode = 'chase';
@@ -85,12 +100,14 @@ export class RaceEngine {
   private rightIndicator = false;
   private hazardLights = false;
   private paused = false;
+  private awaitingIntroStart = false;
   private hitstopTimer = 0;
   private cameraShake = 0;
 
   private countdown = 3;
   private countdownTimer = 0;
   private raceTimeSec = 0;
+  private playerFinishTimeSec = 0;
   private cleanDrivingScore = 0;
   private driftScore = 0;
   private nitroUses = 0;
@@ -119,8 +136,22 @@ export class RaceEngine {
   private _v3 = new THREE.Vector3();
 
   private fpsSamples: number[] = [];
-  private lastTelemetryTime = 0;
   private lastBeepStep = 4;
+  private raceFinished = false;
+
+  // Personal-best Ghost state (zero-GC during loop)
+  private ghostConfig: GhostConfig | null = null;
+  private ghostSamples: GhostSample[] = [];
+  private ghostRig: BuiltCarRig | null = null;
+  private ghostWheelRadius = 0.34;
+  private ghostWheelSpinAngle = 0;
+  private ghostFinished = false;
+  private ghostDeltaSec: number | null = null;
+  private _ghostPos = new THREE.Vector3();
+
+  // Player run recording for future ghost playback
+  private recordedGhostSamples: GhostSample[] = [];
+  private lastGhostRecordTimeSec = -1;
 
   constructor(params: {
     container: HTMLElement;
@@ -129,8 +160,11 @@ export class RaceEngine {
     ownedCarState: OwnedCarState;
     settings: GameSettings;
     sound: SoundEngine;
+    ghostConfig?: GhostConfig | null;
+    startPausedForIntro?: boolean;
     onTelemetry: (t: RaceTelemetry) => void;
     onFinish: (res: RaceResult) => void;
+    onStandingsUpdate?: (standings: RaceStanding[]) => void;
     onPauseRequested: () => void;
   }) {
     this.container = params.container;
@@ -138,8 +172,11 @@ export class RaceEngine {
     this.ownedCarState = params.ownedCarState;
     this.settings = params.settings;
     this.sound = params.sound;
+    this.ghostConfig = params.ghostConfig ?? null;
+    this.awaitingIntroStart = Boolean(params.startPausedForIntro);
     this.onTelemetry = params.onTelemetry;
     this.onFinish = params.onFinish;
+    this.onStandingsUpdate = params.onStandingsUpdate;
     this.onPauseRequested = params.onPauseRequested;
 
     const probe = probeWebGL();
@@ -219,8 +256,9 @@ export class RaceEngine {
     this.particles = new ParticleSystem(this.level.weather, propBudget);
     this.scene.add(this.particles.group);
 
-    // 6. Spawn Player + AI Rivals on Starting Grid
+    // 6. Spawn Player + AI Rivals on Starting Grid & Personal-Best Ghost
     this.spawnGrid(params.carId);
+    this.setupGhost();
 
     // 7. Post-processing Bloom on High / Ultra GPU
     if (webglRenderer && !this.isSoftwareGl && (this.resolvedQuality === 'high' || this.resolvedQuality === 'ultra')) {
@@ -247,11 +285,31 @@ export class RaceEngine {
     window.addEventListener('blur', this.handleBlur);
     window.addEventListener('mousemove', this.handleMouseMove);
 
-    // Start Sound & Countdown
+    // Start Sound & Countdown (or hold behind Race Intro until Start Race is pressed)
     this.headlightsMode = this.level.timeOfDay === 'night' || this.level.weather === 'fog' ? 2 : 1;
-    this.sound.startRaceAudio(this.playerBody.spec.engineType);
+    if (!this.awaitingIntroStart) {
+      this.sound.startRaceAudio(this.playerBody.spec.engineType);
+    }
     this.clock.start();
     this.tick();
+  }
+
+  public beginRaceCountdown(): void {
+    if (!this.awaitingIntroStart || this.disposed) return;
+    this.awaitingIntroStart = false;
+    this.countdown = 3;
+    this.countdownTimer = 0;
+    this.lastBeepStep = 4;
+    this.clock.getDelta();
+
+    const p = this.playerBody;
+    const fwd = this._v1.set(Math.sin(p.yaw), 0, Math.cos(p.yaw));
+    this.camTargetPos.copy(p.position).addScaledVector(fwd, -7.2).add(new THREE.Vector3(0, 2.7, 0));
+    this.camera.position.copy(this.camTargetPos);
+    this.camTargetLook.copy(p.position).addScaledVector(fwd, 9);
+    this.camera.lookAt(this.camTargetLook);
+
+    this.sound.startRaceAudio(p.spec.engineType);
   }
 
   private setupLighting(): void {
@@ -339,7 +397,9 @@ export class RaceEngine {
         pos,
         startYaw,
         isPlayer ? this.ownedCarState : undefined,
-        0.92 + (slot % 3) * 0.06
+        0.92 + (slot % 3) * 0.06,
+        isPlayer ? 'You' : `Rival ${slot + 1}`,
+        this.track
       );
       const rig = buildSupercarModel(carId, customization, {
         enableSpotLights: isPlayer && !this.isSoftwareGl,
@@ -365,6 +425,140 @@ export class RaceEngine {
     this.camera.lookAt(this.camTargetLook);
   }
 
+  private setupGhost(): void {
+    if (!this.ghostConfig || !Number.isFinite(this.ghostConfig.bestTimeSec) || this.ghostConfig.bestTimeSec <= 0) {
+      return;
+    }
+
+    const carId = CAR_SPECS[this.ghostConfig.carId] ? this.ghostConfig.carId : this.playerBody.carId;
+    const spec = CAR_SPECS[carId];
+    this.ghostWheelRadius = spec.stats.wheelRadius;
+
+    this.ghostSamples =
+      this.ghostConfig.samples && this.ghostConfig.samples.length >= 2
+        ? this.ghostConfig.samples
+        : buildProceduralGhostSamples(
+            this.track.samples,
+            this.track.totalLength,
+            this.level.laps,
+            this.ghostConfig.bestTimeSec
+          );
+
+    this.ghostRig = buildSupercarModel(
+      carId,
+      {
+        paintColor: '#38bdf8',
+        paintFinish: 'metallic',
+        rimStyle: spec.defaultRim,
+        rimColor: '#bae6fd',
+        tireStyle: 'racing_slick',
+        caliperColor: '#22d3ee',
+        spoilerStyle: carId === 'porsche_gt3' || carId === 'lamborghini_svj' ? 'gt_wing' : 'lip',
+        bodyKit: 'sport',
+        windowTint: 0.35,
+        underglowEnabled: false,
+        underglowColor: '#38bdf8',
+        unlockedItems: [],
+      },
+      {
+        enableSpotLights: false,
+        isPlayer: false,
+        isGhost: true,
+      }
+    );
+
+    // Position ghost at initial start frame
+    this.updateGhost(0);
+    this.ghostRig.root.visible = this.settings.showGhost !== false;
+    this.scene.add(this.ghostRig.root);
+    console.log(
+      `[DK Car Race][Ghost] Spawned personal best ghost (${spec.brand} ${spec.name}, PB ${this.ghostConfig.bestTimeSec.toFixed(2)}s, ${
+        this.ghostConfig.samples ? 'recorded telemetry' : 'procedural pace'
+      })`
+    );
+  }
+
+  private recordPlayerGhostSample(force = false): void {
+    if (!force && this.raceTimeSec - this.lastGhostRecordTimeSec < 0.22) {
+      return;
+    }
+    this.lastGhostRecordTimeSec = this.raceTimeSec;
+
+    const p = this.playerBody;
+    const nearest = this.track.getNearestSample(p.position, p.trackHintIndex);
+    const tangentYaw = Math.atan2(nearest.sample.tangent.x, nearest.sample.tangent.z);
+    let yawOffset = p.yaw - tangentYaw;
+    while (yawOffset > Math.PI) yawOffset -= Math.PI * 2;
+    while (yawOffset < -Math.PI) yawOffset += Math.PI * 2;
+
+    this.recordedGhostSamples.push({
+      tSec: Number(this.raceTimeSec.toFixed(3)),
+      progress: Number(p.totalProgress.toFixed(5)),
+      lat: Number(nearest.lateralOffset.toFixed(3)),
+      yawOffset: Number(yawOffset.toFixed(4)),
+      pitch: Number(p.bodyPitch.toFixed(4)),
+      roll: Number(p.bodyRoll.toFixed(4)),
+      speedMs: Number(Math.max(0, p.speedMs).toFixed(2)),
+      nitro: p.nitroActive,
+    });
+  }
+
+  private updateGhost(dt: number): void {
+    if (!this.ghostRig || this.ghostSamples.length < 2) return;
+
+    const visible = this.settings.showGhost !== false;
+    this.ghostRig.root.visible = visible;
+
+    const evalTime = this.countdown < 0 ? this.raceTimeSec : 0;
+    const pose = evaluateGhostPose(
+      this.ghostSamples,
+      this.track.samples,
+      evalTime,
+      this.level.laps,
+      this._ghostPos
+    );
+
+    this.ghostFinished = pose.finished;
+    this.ghostRig.root.position.copy(this._ghostPos);
+    this.ghostRig.root.rotation.set(pose.pitch, pose.yaw, pose.roll, 'YXZ');
+
+    if (dt > 0 && !pose.finished && this.countdown < 0) {
+      this.ghostWheelSpinAngle += (pose.speedMs / this.ghostWheelRadius) * dt;
+      for (let i = 0; i < this.ghostRig.wheelSpinGroups.length; i++) {
+        this.ghostRig.wheelSpinGroups[i].rotation.x = this.ghostWheelSpinAngle;
+      }
+    }
+
+    const showFlames = visible && pose.nitroActive && !pose.finished && this.countdown < 0;
+    this.ghostRig.nitroFlameLeft.visible = showFlames;
+    this.ghostRig.nitroFlameRight.visible = showFlames;
+    if (showFlames) {
+      const flicker = 0.85 + Math.random() * 0.35;
+      this.ghostRig.nitroFlameLeft.scale.set(1, 1, flicker);
+      this.ghostRig.nitroFlameRight.scale.set(1, 1, flicker);
+    }
+
+    // Subtle holographic shimmer & post-finish fade
+    if (this.ghostRig.ghostMaterials) {
+      const pulse = 0.94 + Math.sin(performance.now() * 0.0045) * 0.06;
+      const factor = pose.opacityScale * pulse;
+      for (let i = 0; i < this.ghostRig.ghostMaterials.length; i++) {
+        const entry = this.ghostRig.ghostMaterials[i];
+        entry.material.opacity = entry.baseOpacity * factor;
+      }
+    }
+
+    if (this.countdown < 0 && this.raceTimeSec > 0.25) {
+      const ghostAtPlayer = estimateGhostTimeAtProgress(
+        this.ghostSamples,
+        this.playerBody.totalProgress
+      );
+      this.ghostDeltaSec = ghostAtPlayer !== null ? this.raceTimeSec - ghostAtPlayer : null;
+    } else {
+      this.ghostDeltaSec = null;
+    }
+  }
+
   public setTouchInput(input: Partial<ExternalControlInput>): void {
     Object.assign(this.touchInput, input);
   }
@@ -372,6 +566,9 @@ export class RaceEngine {
   public setSettings(settings: GameSettings): void {
     this.settings = settings;
     this.sound.updateSettings(settings);
+    if (this.ghostRig) {
+      this.ghostRig.root.visible = settings.showGhost !== false;
+    }
     const newQ = resolveQualityPreset(settings.quality, this.isSoftwareGl);
     if (newQ !== this.resolvedQuality && this.renderer) {
       this.resolvedQuality = newQ;
@@ -387,7 +584,9 @@ export class RaceEngine {
       this.sound.stopRaceAudio();
     } else {
       this.clock.getDelta();
-      this.sound.startRaceAudio(this.playerBody.spec.engineType);
+      if (!this.awaitingIntroStart && !this.raceFinished) {
+        this.sound.startRaceAudio(this.playerBody.spec.engineType);
+      }
     }
   }
 
@@ -586,6 +785,20 @@ export class RaceEngine {
   }
 
   private updateSimulation(dt: number, rawDt: number): void {
+    if (this.awaitingIntroStart) {
+      const p = this.playerBody;
+      const t = performance.now() * 0.00028;
+      this.camera.position.set(
+        p.position.x + Math.cos(t) * 14,
+        p.position.y + 5.6,
+        p.position.z + Math.sin(t) * 14
+      );
+      this.camera.lookAt(p.position.x, p.position.y + 1.0, p.position.z);
+      this.particles.update(dt, this.camera.position, p.position);
+      this.emitTelemetry();
+      return;
+    }
+
     if (this.hitstopTimer > 0) {
       this.hitstopTimer -= dt;
       return;
@@ -612,25 +825,42 @@ export class RaceEngine {
     }
 
     const input = this.readCombinedPlayerInput();
-    this.sound.setHorn(input.horn);
+    this.sound.setHorn(!this.raceFinished && input.horn);
 
     if (this.countdown < 0) {
       this.raceTimeSec += dt;
 
-      // Track nitro activations
-      if (this.playerBody.nitroActive && !this.wasNitroActive) {
-        this.nitroUses++;
-      }
-      this.wasNitroActive = this.playerBody.nitroActive;
+      if (!this.raceFinished) {
+        // Track nitro activations
+        if (this.playerBody.nitroActive && !this.wasNitroActive) {
+          this.nitroUses++;
+        }
+        this.wasNitroActive = this.playerBody.nitroActive;
 
-      // Clean driving accumulation
-      if (this.playerBody.speedKmh > 70 && !this.playerBody.drifting) {
-        this.cleanDrivingScore += dt * 14;
+        // Clean driving accumulation
+        if (this.playerBody.speedKmh > 70 && !this.playerBody.drifting) {
+          this.cleanDrivingScore += dt * 14;
+        }
       }
 
+      let playerJustFinished = false;
+      let anyRivalJustFinished = false;
       for (const v of this.vehicles) {
-        if (v.finished) continue;
-        const vInput = v.isPlayer ? input : computeAiInput(v, this.track, this.level);
+        let vInput: VehicleInput;
+        if (v.finished) {
+          // Coast gently past the finish gantry along the track spline while keeping finish stats locked
+          const cruise = computeAiInput(v, this.track, this.level);
+          vInput = {
+            throttle: Math.min(0.32, cruise.throttle),
+            brake: cruise.brake,
+            steer: cruise.steer,
+            handbrake: false,
+            nitro: false,
+          };
+        } else {
+          vInput = v.isPlayer ? input : computeAiInput(v, this.track, this.level);
+        }
+
         stepVehiclePhysics(
           v,
           vInput,
@@ -642,7 +872,7 @@ export class RaceEngine {
           this.raceTimeSec,
           {
             onCollision: (intensity, pos) => {
-              if (v.isPlayer) {
+              if (v.isPlayer && !v.finished) {
                 this.triggerImpact(intensity, pos);
               }
             },
@@ -657,18 +887,43 @@ export class RaceEngine {
               this.checkpointNoticeTimer = 2.0;
             },
             onFinish: () => {
-              if (v.isPlayer) this.handlePlayerFinish();
+              if (v.isPlayer) {
+                playerJustFinished = true;
+              } else {
+                anyRivalJustFinished = true;
+                console.log(
+                  `[DK Car Race] ${v.driverName} (${v.carName}) crossed finish line at ${v.finishTimeSec.toFixed(2)}s`
+                );
+              }
             },
             onDriftMeters: (m) => {
-              this.driftScore += m;
+              if (!this.raceFinished) this.driftScore += m;
             },
           }
         );
       }
 
       resolveCarToCarCollisions(this.vehicles, (intensity, pos) => {
-        this.triggerImpact(intensity, pos);
+        if (!this.raceFinished) this.triggerImpact(intensity, pos);
       });
+
+      // Record initial and periodic keyframes for future personal-best ghost runs
+      if (!this.playerBody.finished) {
+        this.recordPlayerGhostSample(this.recordedGhostSamples.length === 0);
+      }
+
+      if (playerJustFinished) {
+        this.handlePlayerFinish();
+      } else if (anyRivalJustFinished && this.raceFinished && this.onStandingsUpdate) {
+        const updatedStandings = buildRaceStandings(
+          this.vehicles,
+          this.level.laps,
+          this.track.totalLength,
+          this.level.rivalSkill,
+          this.playerFinishTimeSec
+        );
+        this.onStandingsUpdate(updatedStandings);
+      }
     } else {
       // Allow revving engine on grid during countdown!
       const idle = this.playerBody.spec.stats.idleRpm;
@@ -676,6 +931,9 @@ export class RaceEngine {
       const targetRev = idle + input.throttle * (red * 0.72 - idle);
       this.playerBody.rpm = THREE.MathUtils.damp(this.playerBody.rpm, targetRev, 8, dt);
     }
+
+    // Update Personal-Best Ghost car transform, wheels & split delta
+    this.updateGhost(dt);
 
     // Update 3D car rigs, lights, wheels, wipers, and particles
     const blinkOn = Math.floor(performance.now() / 360) % 2 === 0;
@@ -768,25 +1026,23 @@ export class RaceEngine {
     this.particles.update(dt, this.camera.position, this.playerBody.position);
 
     // Update Sound Engine
-    this.sound.updateTelemetry({
-      rpm: this.playerBody.rpm,
-      idleRpm: this.playerBody.spec.stats.idleRpm,
-      redlineRpm: this.playerBody.spec.stats.redlineRpm,
-      gear: this.playerBody.gear,
-      throttle: input.throttle,
-      speedKmh: this.playerBody.speedKmh,
-      slipRatio: this.playerBody.slipRatio,
-      nitroActive: this.playerBody.nitroActive,
-    });
+    if (!this.raceFinished) {
+      this.sound.updateTelemetry({
+        rpm: this.playerBody.rpm,
+        idleRpm: this.playerBody.spec.stats.idleRpm,
+        redlineRpm: this.playerBody.spec.stats.redlineRpm,
+        gear: this.playerBody.gear,
+        throttle: input.throttle,
+        speedKmh: this.playerBody.speedKmh,
+        slipRatio: this.playerBody.slipRatio,
+        nitroActive: this.playerBody.nitroActive,
+      });
+    }
 
-    // Emit HUD telemetry at ~30Hz so React never thrashes
-    const now = performance.now();
+    // Emit HUD telemetry every frame so live race position & speed update immediately
     this.fpsSamples.push(1 / Math.max(0.001, rawDt));
     if (this.fpsSamples.length > 20) this.fpsSamples.shift();
-    if (now - this.lastTelemetryTime > 32) {
-      this.lastTelemetryTime = now;
-      this.emitTelemetry();
-    }
+    this.emitTelemetry();
   }
 
   private triggerImpact(intensity: number, pos: THREE.Vector3): void {
@@ -982,6 +1238,20 @@ export class RaceEngine {
       ctx.fill();
     }
 
+    // Personal-best Ghost car (semi-transparent cyan silhouette in 2D fallback)
+    if (this.ghostRig && this.ghostRig.root.visible) {
+      ctx.save();
+      ctx.globalAlpha = 0.42;
+      ctx.translate(this.ghostRig.root.position.x, this.ghostRig.root.position.z);
+      ctx.rotate(-this.ghostRig.root.rotation.y);
+      ctx.fillStyle = '#38bdf8';
+      ctx.fillRect(-1.05, -2.35, 2.1, 4.7);
+      ctx.strokeStyle = '#e0f2fe';
+      ctx.lineWidth = 0.22;
+      ctx.strokeRect(-1.05, -2.35, 2.1, 4.7);
+      ctx.restore();
+    }
+
     // Vehicles
     for (const v of this.vehicles) {
       ctx.save();
@@ -1019,8 +1289,7 @@ export class RaceEngine {
   }
 
   private emitTelemetry(): void {
-    const sorted = [...this.vehicles].sort((a, b) => b.totalProgress - a.totalProgress);
-    const posRank = sorted.findIndex((v) => v.isPlayer) + 1;
+    const posRank = calculatePlayerPosition(this.vehicles);
     const avgDmg = Math.round(
       (this.playerBody.damage.body + this.playerBody.damage.engine + this.playerBody.damage.tires) / 3
     );
@@ -1065,6 +1334,13 @@ export class RaceEngine {
       wrongWay,
       checkpointNotice: this.checkpointNotice,
       fps: avgFps,
+      ghostDeltaSec:
+        this.ghostRig && this.ghostRig.root.visible ? this.ghostDeltaSec : null,
+      ghostBestTimeSec:
+        this.ghostRig && this.ghostRig.root.visible && this.ghostConfig
+          ? this.ghostConfig.bestTimeSec
+          : null,
+      ghostFinished: this.ghostFinished,
       minimapData: {
         trackPoints: this.track.minimapPoints,
         bounds: this.track.minimapBounds,
@@ -1076,20 +1352,94 @@ export class RaceEngine {
         rivals: this.vehicles
           .filter((v) => !v.isPlayer)
           .map((v) => ({ x: v.position.x, z: v.position.z })),
+        ghost:
+          this.ghostRig && this.ghostRig.root.visible
+            ? {
+                x: this.ghostRig.root.position.x,
+                z: this.ghostRig.root.position.z,
+              }
+            : null,
       },
     });
   }
 
   private handlePlayerFinish(): void {
-    const sorted = [...this.vehicles].sort((a, b) => b.totalProgress - a.totalProgress);
-    const position = sorted.findIndex((v) => v.isPlayer) + 1;
+    if (this.raceFinished) return;
+    this.raceFinished = true;
+    this.cameraMode = 'cinematic';
 
-    const posMult =
-      position === 1 ? 1.5 : position === 2 ? 1.0 : position === 3 ? 0.72 : 0.38;
-    const positionPoints = Math.round(this.level.baseReward * posMult);
+    const playerFinishTime =
+      this.playerBody.finishTimeSec > 0 ? this.playerBody.finishTimeSec : this.raceTimeSec;
+    this.playerFinishTimeSec = playerFinishTime;
+
+    // Append final exact finish keyframe for personal-best ghost recording
+    const finishNearest = this.track.getNearestSample(
+      this.playerBody.position,
+      this.playerBody.trackHintIndex
+    );
+    const finishTanYaw = Math.atan2(
+      finishNearest.sample.tangent.x,
+      finishNearest.sample.tangent.z
+    );
+    let finishYawOff = this.playerBody.yaw - finishTanYaw;
+    while (finishYawOff > Math.PI) finishYawOff -= Math.PI * 2;
+    while (finishYawOff < -Math.PI) finishYawOff += Math.PI * 2;
+    this.recordedGhostSamples.push({
+      tSec: Number(playerFinishTime.toFixed(3)),
+      progress: this.level.laps,
+      lat: Number(finishNearest.lateralOffset.toFixed(3)),
+      yawOffset: Number(finishYawOff.toFixed(4)),
+      pitch: 0,
+      roll: 0,
+      speedMs: Number(Math.max(0, this.playerBody.speedMs).toFixed(2)),
+      nitro: this.playerBody.nitroActive,
+    });
+    const compactGhostSamples = downsampleGhostSamples(this.recordedGhostSamples, 220);
+
+    // Compute final position using the exact same function as live HUD telemetry
+    const position = calculatePlayerPosition(this.vehicles);
+    const standings = buildRaceStandings(
+      this.vehicles,
+      this.level.laps,
+      this.track.totalLength,
+      this.level.rivalSkill,
+      playerFinishTime
+    );
+
+    const positionPoints = computePositionPoints(
+      this.level.baseReward,
+      position,
+      this.vehicles.length
+    );
     const cleanBonus = Math.min(350, Math.round(this.cleanDrivingScore * 0.4));
     const driftBonus = Math.min(300, Math.round(this.driftScore * 0.8));
     const nitroBonus = Math.min(200, this.nitroUses * 30);
+
+    console.log(
+      `[DK Car Race] Final Standings (Level ${this.level.levelNumber} · ${this.level.name} · Seed #${this.level.seed}): Player placed ${position} / ${this.vehicles.length} in ${playerFinishTime.toFixed(2)}s (+${positionPoints} pts)`
+    );
+    for (const v of this.vehicles) {
+      console.log(
+        `[DK Car Race][Racer] ${v.driverName} (${v.carName}) | Lap: ${
+          v.finished ? this.level.laps : v.lapsCompleted
+        }/${this.level.laps} | Distance: ${v.trackDistanceMeters.toFixed(1)}m | FinishTime: ${
+          v.finished ? `${v.finishTimeSec.toFixed(2)}s` : 'Racing...'
+        }`
+      );
+    }
+    console.table(
+      standings.map((s) => ({
+        Pos: s.position,
+        Racer: s.name,
+        Car: s.carName,
+        Lap: `${s.lapsCompleted}/${s.totalLaps}`,
+        DistanceM: `${s.trackDistanceMeters.toFixed(1)}m`,
+        FinishTime:
+          s.finishTimeSec !== null
+            ? `${s.finishTimeSec.toFixed(2)}s`
+            : `~${s.estimatedTimeSec.toFixed(2)}s (est.)`,
+      }))
+    );
 
     this.sound.stopRaceAudio();
     this.onFinish({
@@ -1097,8 +1447,8 @@ export class RaceEngine {
       carId: this.playerBody.carId,
       position,
       totalCars: this.vehicles.length,
-      finishTimeSec: this.raceTimeSec,
-      bestLapSec: this.playerBody.bestLapSec ?? this.raceTimeSec,
+      finishTimeSec: playerFinishTime,
+      bestLapSec: this.playerBody.bestLapSec ?? playerFinishTime,
       positionPoints,
       cleanBonus,
       driftBonus,
@@ -1107,6 +1457,9 @@ export class RaceEngine {
       isNewBestTime: false,
       newDamage: { ...this.playerBody.damage },
       unlockedNextLevel: position <= 3,
+      standings,
+      ghostSamples: compactGhostSamples,
+      ghostBestTimeSec: this.ghostConfig?.bestTimeSec ?? null,
     });
   }
 

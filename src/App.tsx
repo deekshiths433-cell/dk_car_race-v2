@@ -10,12 +10,13 @@ import { LevelSelectModal } from './components/LevelSelectModal';
 import { PauseModal } from './components/PauseModal';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { RaceHUD } from './components/RaceHUD';
+import { RaceIntroModal } from './components/RaceIntroModal';
 import { RepairShopModal } from './components/RepairShopModal';
 import { ResultsModal } from './components/ResultsModal';
 import { RewardedAdModal } from './components/RewardedAdModal';
 import { SettingsModal } from './components/SettingsModal';
 import { CAR_SPECS } from './data/cars';
-import { getLevelConfig } from './data/levels';
+import { generateRaceLevelConfig } from './data/levels';
 import { ExternalControlInput, RaceEngine } from './engine/RaceEngine';
 import { ShowroomCanvas } from './engine/ShowroomCanvas';
 import { isRunningAsInstalledPWA } from './hooks/usePWAInstall';
@@ -23,12 +24,16 @@ import {
   CarCustomization,
   CarId,
   CarUpgrades,
+  FavoriteMapSeed,
   GameSettings,
+  LevelConfig,
   RaceResult,
+  RaceStanding,
   RaceTelemetry,
   SaveState,
 } from './types/game';
 import { registerRewardedAdHandler, RewardedAdRequest, RewardedAdResult } from './utils/ads';
+import { getPersonalBestGhostConfig } from './utils/ghost';
 import {
   isMobileDevice,
   loadSaveState,
@@ -45,6 +50,8 @@ export default function App() {
 
   const [isMobile, setIsMobile] = useState(() => isMobileDevice());
   const [raceRunSalt, setRaceRunSalt] = useState(0);
+  const [activeRaceLevel, setActiveRaceLevel] = useState<LevelConfig | null>(null);
+  const [showRaceIntro, setShowRaceIntro] = useState(false);
   const [paused, setPaused] = useState(false);
   const [raceResult, setRaceResult] = useState<RaceResult | null>(null);
   const [telemetry, setTelemetry] = useState<RaceTelemetry | null>(null);
@@ -141,32 +148,113 @@ export default function App() {
       ?.orientation ?? null;
   }
 
-  const startRace = (levelNumber = save.currentLevel) => {
+  const startRace = (
+    levelNumber = saveRef.current.currentLevel,
+    favoriteMap?: FavoriteMapSeed
+  ) => {
     soundRef.current?.ensureStarted();
     requestLandscapeFullscreen();
+
+    const currentSave = saveRef.current;
+    const prevLevel = activeRaceLevel;
+    const nextLevel = generateRaceLevelConfig(levelNumber, {
+      lastSeed: prevLevel?.seed ?? currentSave.lastRaceSeed,
+      lastBiome: prevLevel?.biome ?? currentSave.lastRaceBiome,
+      lastTimeOfDay: prevLevel?.timeOfDay ?? currentSave.lastRaceTimeOfDay,
+      lastWeather: prevLevel?.weather ?? currentSave.lastRaceWeather,
+      favorite: favoriteMap,
+    });
+
+    setActiveRaceLevel(nextLevel);
+    setShowRaceIntro(true);
     setRaceResult(null);
     setPaused(false);
     setActiveModal('none');
-    updateSave((prev) => ({ ...prev, currentLevel: levelNumber }));
+    updateSave((prev) => ({
+      ...prev,
+      currentLevel: levelNumber,
+      lastRaceSeed: nextLevel.seed,
+      lastRaceBiome: nextLevel.biome,
+      lastRaceWeather: nextLevel.weather,
+      lastRaceTimeOfDay: nextLevel.timeOfDay,
+    }));
     setRaceRunSalt((s) => s + 1);
     setScreen('race');
   };
+
+  const toggleFavoriteMap = useCallback(
+    (level: LevelConfig) => {
+      updateSave((prev) => {
+        const list = prev.favoriteMaps ?? [];
+        const exists = list.some((m) => m.seed === level.seed);
+        if (exists) {
+          return {
+            ...prev,
+            favoriteMaps: list.filter((m) => m.seed !== level.seed),
+          };
+        }
+        const entry: FavoriteMapSeed = {
+          id: `fav_${level.seed}`,
+          seed: level.seed,
+          levelNumber: level.levelNumber,
+          name: level.name,
+          biome: level.biome,
+          weather: level.weather,
+          timeOfDay: level.timeOfDay,
+          layoutArchetype: level.layoutArchetype ?? 'sweep',
+          savedAtISO: new Date().toISOString(),
+        };
+        return {
+          ...prev,
+          favoriteMaps: [entry, ...list].slice(0, 24),
+        };
+      });
+    },
+    [updateSave]
+  );
+
+  const removeFavoriteMap = useCallback(
+    (seed: number) => {
+      updateSave((prev) => ({
+        ...prev,
+        favoriteMaps: (prev.favoriteMaps ?? []).filter((m) => m.seed !== seed),
+      }));
+    },
+    [updateSave]
+  );
 
   // Mount & lifecycle of Three.js RaceEngine
   useEffect(() => {
     if (screen !== 'race' || !raceMountRef.current) return;
 
-    const level = getLevelConfig(save.currentLevel, raceRunSalt);
-    const ownedCarState = save.cars[save.selectedCarId];
+    const currentSave = saveRef.current;
+    const level =
+      activeRaceLevel ??
+      generateRaceLevelConfig(currentSave.currentLevel, {
+        lastSeed: currentSave.lastRaceSeed,
+        lastBiome: currentSave.lastRaceBiome,
+        lastTimeOfDay: currentSave.lastRaceTimeOfDay,
+        lastWeather: currentSave.lastRaceWeather,
+      });
+    const ownedCarState = currentSave.cars[currentSave.selectedCarId];
+    const ghostConfig =
+      currentSave.settings.showGhost !== false
+        ? getPersonalBestGhostConfig(currentSave, level)
+        : null;
 
     const engine = new RaceEngine({
       container: raceMountRef.current,
       level,
-      carId: save.selectedCarId,
+      carId: currentSave.selectedCarId,
       ownedCarState,
-      settings: save.settings,
+      settings: currentSave.settings,
       sound: soundRef.current!,
+      ghostConfig,
+      startPausedForIntro: true,
       onTelemetry: (t) => setTelemetry(t),
+      onStandingsUpdate: (standings: RaceStanding[]) => {
+        setRaceResult((prev) => (prev ? { ...prev, standings } : prev));
+      },
       onPauseRequested: () => {
         setPaused((p) => {
           const next = !p;
@@ -221,19 +309,33 @@ export default function App() {
           });
 
           const spec = CAR_SPECS[res.carId];
+          const dateISO = new Date().toISOString().slice(0, 10);
           const newLbEntry = {
             id: `run_${Date.now()}`,
             driverName: 'You',
             carName: `${spec.brand} ${spec.name}`,
+            carId: res.carId,
             levelNumber: res.level.levelNumber,
             biome: res.level.biome,
             bestTimeSec: res.finishTimeSec,
             points: res.totalPointsEarned,
-            dateISO: new Date().toISOString().slice(0, 10),
+            dateISO,
           };
           const updatedLb = [...prev.leaderboard, newLbEntry]
             .sort((a, b) => a.bestTimeSec - b.bestTimeSec)
-            .slice(0, 15);
+            .slice(0, 25);
+
+          const updatedGhosts = { ...(prev.ghostsByLevel ?? {}) };
+          if (isNewBest && res.ghostSamples && res.ghostSamples.length >= 2) {
+            updatedGhosts[res.level.levelNumber] = {
+              levelNumber: res.level.levelNumber,
+              carId: res.carId,
+              carName: `${spec.brand} ${spec.name}`,
+              bestTimeSec: res.finishTimeSec,
+              samples: res.ghostSamples,
+              dateISO,
+            };
+          }
 
           return {
             ...prev,
@@ -246,6 +348,7 @@ export default function App() {
               ...prev.bestTimesByLevel,
               [res.level.levelNumber]: isNewBest ? res.finishTimeSec : prevBest,
             },
+            ghostsByLevel: updatedGhosts,
             missions: updatedMissions,
             achievements: updatedAch,
             leaderboard: updatedLb,
@@ -318,7 +421,7 @@ export default function App() {
       {screen === 'race' && (
         <>
           <div ref={raceMountRef} className="relative z-0 w-full h-full" />
-          {!raceResult && (
+          {!raceResult && !showRaceIntro && (
             <RaceHUD
               telemetry={telemetry}
               settings={save.settings}
@@ -340,7 +443,27 @@ export default function App() {
             />
           )}
 
-          {paused && !raceResult && (
+          {showRaceIntro && activeRaceLevel && (
+            <RaceIntroModal
+              level={activeRaceLevel}
+              isFavorite={Boolean(
+                save.favoriteMaps?.some((m) => m.seed === activeRaceLevel.seed)
+              )}
+              onStartCountdown={() => {
+                soundRef.current?.ensureStarted();
+                setShowRaceIntro(false);
+                engineRef.current?.beginRaceCountdown();
+              }}
+              onRerollMap={() => startRace(activeRaceLevel.levelNumber)}
+              onToggleFavorite={() => toggleFavoriteMap(activeRaceLevel)}
+              onCancel={() => {
+                setShowRaceIntro(false);
+                setScreen('home');
+              }}
+            />
+          )}
+
+          {paused && !raceResult && !showRaceIntro && (
             <PauseModal
               controlMode={save.settings.controlMode}
               onChangeControlMode={(mode) => handleUpdateSettings({ controlMode: mode })}
@@ -348,13 +471,16 @@ export default function App() {
                 setPaused(false);
                 engineRef.current?.setPaused(false);
               }}
-              onRestart={() => startRace(save.currentLevel)}
+              onRestart={() =>
+                startRace(activeRaceLevel?.levelNumber ?? save.currentLevel)
+              }
               onOpenSettings={() => {
                 setSettingsTab('controls');
                 setActiveModal('settings');
               }}
               onQuitHome={() => {
                 setPaused(false);
+                setShowRaceIntro(false);
                 setScreen('home');
               }}
             />
@@ -363,6 +489,10 @@ export default function App() {
           {raceResult && (
             <ResultsModal
               result={raceResult}
+              isFavoriteMap={Boolean(
+                save.favoriteMaps?.some((m) => m.seed === raceResult.level.seed)
+              )}
+              onToggleFavoriteMap={() => toggleFavoriteMap(raceResult.level)}
               onNextLevel={() =>
                 startRace(
                   raceResult.unlockedNextLevel
@@ -583,6 +713,8 @@ export default function App() {
         <LevelSelectModal
           save={save}
           onSelectAndPlay={(lvl) => startRace(lvl)}
+          onReplayFavorite={(fav) => startRace(save.currentLevel, fav)}
+          onRemoveFavorite={removeFavoriteMap}
           onClose={() => setActiveModal('none')}
         />
       )}

@@ -20,6 +20,9 @@ export interface VehicleInput {
 
 export interface VehicleBody {
   id: string;
+  driverName: string;
+  carName: string;
+  topSpeedKmh: number;
   isPlayer: boolean;
   carId: CarId;
   spec: CarSpec;
@@ -42,8 +45,11 @@ export interface VehicleBody {
   damage: CarDamage;
   trackHintIndex: number;
   lap: number;
+  lapsCompleted: number;
+  hasCrossedStart: boolean;
   lastT: number;
-  totalProgress: number; // lap + t
+  totalProgress: number; // lapsCompleted + t (negative behind start line before race start)
+  trackDistanceMeters: number;
   finished: boolean;
   finishTimeSec: number;
   bestLapSec: number | null;
@@ -60,11 +66,21 @@ export function createVehicleBody(
   startPos: THREE.Vector3,
   startYaw: number,
   ownedState?: OwnedCarState,
-  aiSpeedFactor = 1
+  aiSpeedFactor = 1,
+  driverName?: string,
+  track?: GeneratedTrack
 ): VehicleBody {
   const spec = CAR_SPECS[carId];
+  const initialNearest = track ? track.getNearestSample(startPos) : null;
+  const initialT = initialNearest ? initialNearest.sample.t : 0;
+  const hasCrossedStart = initialT <= 0.5;
+  const initialProgress = hasCrossedStart ? initialT : initialT - 1;
+
   return {
     id,
+    driverName: driverName ?? (isPlayer ? 'You' : id.toUpperCase()),
+    carName: `${spec.brand} ${spec.name}`,
+    topSpeedKmh: spec.stats.topSpeedKmh,
     isPlayer,
     carId,
     spec,
@@ -85,10 +101,13 @@ export function createVehicleBody(
     bodyPitch: 0,
     bodyRoll: 0,
     damage: ownedState ? { ...ownedState.damage } : { body: 0, engine: 0, tires: 0 },
-    trackHintIndex: 0,
+    trackHintIndex: initialNearest ? initialNearest.index : 0,
     lap: 1,
-    lastT: 0,
-    totalProgress: 0,
+    lapsCompleted: 0,
+    hasCrossedStart,
+    lastT: initialT,
+    totalProgress: initialProgress,
+    trackDistanceMeters: initialProgress * (track?.totalLength ?? 1600),
     finished: false,
     finishTimeSec: 0,
     bestLapSec: null,
@@ -357,42 +376,78 @@ export function stepVehiclePhysics(
     v.rpm = THREE.MathUtils.clamp(rpm + input.throttle * 380, stats.idleRpm, stats.redlineRpm);
   }
 
-  // Track Progress, Checkpoints & Lap Crossing
-  const t = postNearest.sample.t;
-  // Checkpoints
-  for (const cp of track.checkpoints) {
-    if (!v.passedCheckpoints.has(cp.index)) {
-      const diff = Math.abs(t - cp.t);
-      if (diff < 0.045) {
-        v.passedCheckpoints.add(cp.index);
-        if (v.isPlayer) callbacks.onCheckpoint?.(cp.index);
+  // Track Progress, Checkpoints & Lap Crossing (locked once finished so finishTimeSec & distance stay exact)
+  if (!v.finished) {
+    const t = postNearest.sample.t;
+
+    // Transition cleanly across start line from grid spawn (behind t=1.0 -> t=0.0)
+    if (!v.hasCrossedStart) {
+      if (v.lastT > 0.85 && t < 0.15) {
+        v.hasCrossedStart = true;
+      } else if (t <= 0.5 && v.lastT <= 0.5) {
+        v.hasCrossedStart = true;
       }
     }
-  }
 
-  // Detect crossing start/finish line forward (t wraps from >0.85 to <0.15)
-  if (v.lastT > 0.85 && t < 0.15 && v.passedCheckpoints.size >= 2) {
-    const lapTime = raceTimeSec - v.currentLapStartSec;
-    v.currentLapStartSec = raceTimeSec;
-    if (v.bestLapSec === null || lapTime < v.bestLapSec) {
-      v.bestLapSec = lapTime;
+    // Checkpoints (only count after crossing start line on the current lap)
+    if (v.hasCrossedStart) {
+      for (const cp of track.checkpoints) {
+        if (!v.passedCheckpoints.has(cp.index)) {
+          const diff = Math.abs(t - cp.t);
+          if (diff < 0.045) {
+            v.passedCheckpoints.add(cp.index);
+            if (v.isPlayer) callbacks.onCheckpoint?.(cp.index);
+          }
+        }
+      }
     }
-    v.passedCheckpoints.clear();
-    if (v.isPlayer) callbacks.onLapComplete?.(lapTime);
 
-    if (v.lap >= level.laps) {
-      v.finished = true;
-      v.finishTimeSec = raceTimeSec;
-      callbacks.onFinish?.();
+    // Detect crossing start/finish line forward after hitting checkpoints (t wraps from >0.85 to <0.15)
+    if (v.hasCrossedStart && v.lastT > 0.85 && t < 0.15 && v.passedCheckpoints.size >= 2) {
+      const wrapSpan = (1 - v.lastT) + t;
+      const crossFrac = wrapSpan > 0.0001 ? THREE.MathUtils.clamp((1 - v.lastT) / wrapSpan, 0, 1) : 1;
+      const exactCrossTime = Math.max(0, (raceTimeSec - dt) + dt * crossFrac);
+
+      const lapTime = exactCrossTime - v.currentLapStartSec;
+      v.currentLapStartSec = exactCrossTime;
+      if (v.bestLapSec === null || lapTime < v.bestLapSec) {
+        v.bestLapSec = lapTime;
+      }
+      v.passedCheckpoints.clear();
+      v.lapsCompleted++;
+      if (v.isPlayer) callbacks.onLapComplete?.(lapTime);
+
+      if (v.lapsCompleted >= level.laps) {
+        v.finished = true;
+        v.finishTimeSec = exactCrossTime;
+        v.totalProgress = level.laps;
+        v.trackDistanceMeters = level.laps * track.totalLength;
+        v.lastT = t;
+        callbacks.onFinish?.();
+        return;
+      } else {
+        v.lap = v.lapsCompleted + 1;
+      }
+    }
+
+    // Compute continuous monotonic progress across start/finish wrap boundaries
+    let lapFraction: number;
+    if (!v.hasCrossedStart) {
+      lapFraction = t > 0.5 ? t - 1 : t;
+    } else if (v.lastT < 0.15 && t > 0.85) {
+      // Reversed slightly backward across the start/finish line without completing a lap
+      lapFraction = t - 1;
+    } else if (v.lapsCompleted === 0 && v.passedCheckpoints.size === 0 && t > 0.85) {
+      // Still behind start line after backing up
+      lapFraction = t - 1;
     } else {
-      v.lap++;
+      lapFraction = t;
     }
-  }
 
-  // Prevent false backward wrap from decreasing progress right after start
-  const unwrappedT = v.lastT < 0.15 && t > 0.85 ? 0 : t;
-  v.lastT = t;
-  v.totalProgress = (v.lap - 1) + unwrappedT;
+    v.lastT = t;
+    v.totalProgress = v.lapsCompleted + lapFraction;
+    v.trackDistanceMeters = v.totalProgress * track.totalLength;
+  }
 }
 
 export function computeAiInput(
@@ -400,8 +455,9 @@ export function computeAiInput(
   track: GeneratedTrack,
   level: LevelConfig
 ): VehicleInput {
-  const lookAheadIdx = (ai.trackHintIndex + 10) % (track.samples.length - 1);
-  const futureIdx = (ai.trackHintIndex + 24) % (track.samples.length - 1);
+  const len = Math.max(1, track.samples.length);
+  const lookAheadIdx = (ai.trackHintIndex + 10) % len;
+  const futureIdx = (ai.trackHintIndex + 24) % len;
   const targetSample = track.samples[lookAheadIdx];
   const futureSample = track.samples[futureIdx];
 
@@ -444,6 +500,7 @@ export function resolveCarToCarCollisions(
     for (let j = i + 1; j < vehicles.length; j++) {
       const a = vehicles[i];
       const b = vehicles[j];
+      if (a.finished || b.finished) continue;
       const dx = b.position.x - a.position.x;
       const dz = b.position.z - a.position.z;
       const dSq = dx * dx + dz * dz;

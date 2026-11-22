@@ -87,6 +87,7 @@ export function getDefaultSettings(): GameSettings {
     steeringAssist: 'light',
     vibrationFeedback: true,
     mouseSteering: false,
+    showGhost: true,
     mobileLayout: getDefaultMobileLayout(false),
   };
 }
@@ -240,6 +241,8 @@ export function createInitialSaveState(): SaveState {
     lastDailyClaimDate: '',
     cars: buildInitialCars(),
     bestTimesByLevel: {},
+    ghostsByLevel: {},
+    favoriteMaps: [],
     missions: generateDailyMissions(),
     missionsDate: today,
     achievements: getDefaultAchievements(),
@@ -345,6 +348,11 @@ export function loadSaveState(): SaveState {
       ...base,
       ...parsed,
       cars: mergedCars,
+      ghostsByLevel:
+        parsed.ghostsByLevel && typeof parsed.ghostsByLevel === 'object'
+          ? parsed.ghostsByLevel
+          : {},
+      favoriteMaps: Array.isArray(parsed.favoriteMaps) ? parsed.favoriteMaps : [],
       settings: mergedSettings,
       missions,
       missionsDate: today,

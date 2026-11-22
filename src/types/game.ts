@@ -108,6 +108,13 @@ export interface OwnedCarState {
   damage: CarDamage;
 }
 
+export type TrackArchetype =
+  | 'sweep'
+  | 'hairpin'
+  | 'chicane'
+  | 'speedway'
+  | 'technical';
+
 export interface LevelConfig {
   levelNumber: number;
   name: string;
@@ -123,6 +130,20 @@ export interface LevelConfig {
   seed: number;
   baseReward: number;
   description: string;
+  layoutArchetype?: TrackArchetype;
+  isFavoriteReplay?: boolean;
+}
+
+export interface FavoriteMapSeed {
+  id: string;
+  name: string;
+  seed: number;
+  levelNumber: number;
+  biome: BiomeType;
+  weather: WeatherType;
+  timeOfDay: TimeOfDay;
+  layoutArchetype?: TrackArchetype;
+  savedAtISO: string;
 }
 
 export interface TouchButtonPosition {
@@ -175,6 +196,7 @@ export interface GameSettings {
   steeringAssist: SteeringAssist;
   vibrationFeedback: boolean;
   mouseSteering: boolean;
+  showGhost: boolean;
   mobileLayout: MobileLayoutConfig;
 }
 
@@ -201,11 +223,39 @@ export interface LeaderboardEntry {
   id: string;
   driverName: string;
   carName: string;
+  carId?: CarId;
   levelNumber: number;
   biome: BiomeType;
   bestTimeSec: number;
   points: number;
   dateISO: string;
+}
+
+export interface GhostSample {
+  tSec: number;
+  progress: number;
+  lat: number;
+  yawOffset: number;
+  pitch: number;
+  roll: number;
+  speedMs: number;
+  nitro: boolean;
+}
+
+export interface GhostRecord {
+  levelNumber: number;
+  carId: CarId;
+  carName: string;
+  bestTimeSec: number;
+  samples: GhostSample[];
+  dateISO: string;
+}
+
+export interface GhostConfig {
+  bestTimeSec: number;
+  carId: CarId;
+  carName: string;
+  samples?: GhostSample[];
 }
 
 export interface SaveState {
@@ -220,6 +270,12 @@ export interface SaveState {
   lastDailyClaimDate: string; // YYYY-MM-DD
   cars: Record<CarId, OwnedCarState>;
   bestTimesByLevel: Record<number, number>;
+  ghostsByLevel?: Record<number, GhostRecord>;
+  favoriteMaps?: FavoriteMapSeed[];
+  lastRaceSeed?: number;
+  lastRaceBiome?: BiomeType;
+  lastRaceWeather?: WeatherType;
+  lastRaceTimeOfDay?: TimeOfDay;
   missions: DailyMission[];
   missionsDate: string;
   achievements: Achievement[];
@@ -256,12 +312,30 @@ export interface RaceTelemetry {
   wrongWay: boolean;
   checkpointNotice: string | null;
   fps: number;
+  ghostDeltaSec: number | null;
+  ghostBestTimeSec: number | null;
+  ghostFinished: boolean;
   minimapData: {
     trackPoints: { x: number; z: number }[];
     bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
     player: { x: number; z: number; yaw: number };
     rivals: { x: number; z: number }[];
+    ghost: { x: number; z: number } | null;
   };
+}
+
+export interface RaceStanding {
+  id: string;
+  name: string;
+  carName: string;
+  isPlayer: boolean;
+  position: number;
+  finished: boolean;
+  finishTimeSec: number | null;
+  estimatedTimeSec: number;
+  lapsCompleted: number;
+  totalLaps: number;
+  trackDistanceMeters: number;
 }
 
 export interface RaceResult {
@@ -279,4 +353,7 @@ export interface RaceResult {
   isNewBestTime: boolean;
   newDamage: CarDamage;
   unlockedNextLevel: boolean;
+  standings: RaceStanding[];
+  ghostSamples?: GhostSample[];
+  ghostBestTimeSec?: number | null;
 }
