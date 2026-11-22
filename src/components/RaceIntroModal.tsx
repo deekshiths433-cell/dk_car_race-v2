@@ -69,6 +69,12 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
   );
 
   useEffect(() => {
+    console.log(
+      `[DK Car Race][Intro] Level ${level.levelNumber} (${matched.difficultyName}) | Your car: ${matched.playerEffectiveTopSpeedKmh} km/h (stock ${matched.playerBaseTopSpeedKmh}, upgraded ${matched.playerUpgradedTopSpeedKmh}, ref ${matched.referenceTopSpeedKmh}). Rivals: ${matched.rivalTargetTopSpeedKmh} km/h (factor ${matched.difficultyFactor.toFixed(2)})`
+    );
+  }, [level.levelNumber, matched]);
+
+  useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -335,10 +341,15 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
                   </div>
                 </div>
               </div>
-              <div className="text-[10px] text-slate-400 leading-tight border-t border-white/5 pt-1">
+              <div className="text-[10px] font-mono-num text-cyan-300/95 bg-slate-900/90 rounded px-2 py-1 border border-white/5">
+                Your car: {matched.playerEffectiveTopSpeedKmh} km/h. Rivals:{' '}
+                {matched.rivalTargetTopSpeedKmh} km/h (factor{' '}
+                {matched.difficultyFactor.toFixed(2)})
+              </div>
+              <div className="text-[10px] text-slate-400 leading-tight pt-0.5">
                 {level.levelNumber <= 2
-                  ? 'Pack AI follows close behind clean driving · 50% upgrade pass-through'
-                  : 'Warm-up pace ramps to 100% by final lap · 50% upgrade pass-through'}
+                  ? 'Constant pace from start (+-2% spread) · Pack holds behind clean laps'
+                  : 'Constant full level pace from start (+-2% spread) · 50% upgrade edge'}
               </div>
             </div>
 

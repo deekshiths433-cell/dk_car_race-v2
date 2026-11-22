@@ -229,14 +229,14 @@ export function generateProceduralTrack(
   gantryGroup.position.copy(startSample.point);
   gantryGroup.rotation.y = startYaw;
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.7, roughness: 0.3 });
-  [-halfRoad - 1.4, halfRoad + 1.4].forEach((px) => {
+  [-halfRoad - 2.35, halfRoad + 2.35].forEach((px) => {
     const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.75, 7.5, 0.75), pillarMat);
     pillar.position.set(px, 3.75, 0);
     pillar.castShadow = true;
     gantryGroup.add(pillar);
   });
   const banner = new THREE.Mesh(
-    new THREE.BoxGeometry(roadWidth + 3.2, 2.1, 0.55),
+    new THREE.BoxGeometry(roadWidth + 5.0, 2.1, 0.55),
     new THREE.MeshStandardMaterial({
       map: getFinishBannerTexture(),
       emissive: 0x111111,
@@ -293,11 +293,12 @@ export function generateProceduralTrack(
       roughness: 0.5,
     });
     for (let i = 0; i < level.obstacleCount; i++) {
-      // Never place obstacles right on the start grid
+      // Never place obstacles right on the start grid and always leave wide passing lanes
       const t = 0.09 + ((i + 0.5) / level.obstacleCount) * 0.85;
       const s = samples[Math.floor(t * sampleCount)];
-      const safeSpan = Math.max(1.8, halfRoad - 2.9);
-      const sideOffset = (rng() > 0.5 ? 1 : -1) * (1.8 + rng() * Math.max(0.5, safeSpan - 1.8));
+      const safeSpan = Math.max(2.2, halfRoad - 2.6);
+      const minEdge = Math.min(safeSpan - 0.6, Math.max(2.1, halfRoad * 0.36));
+      const sideOffset = (i % 2 === 0 ? 1 : -1) * (minEdge + rng() * Math.max(0.4, safeSpan - minEdge));
       const pos = s.point.clone().addScaledVector(s.right, sideOffset);
       const isBarrier = i % 3 === 1 && level.levelNumber >= 4;
       pos.y += isBarrier ? 0.36 : 0.52;

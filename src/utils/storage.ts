@@ -89,6 +89,7 @@ export function getDefaultSettings(): GameSettings {
     vibrationFeedback: true,
     mouseSteering: false,
     showGhost: true,
+    showAiDebug: false,
     mobileLayout: getDefaultMobileLayout(false),
   };
 }

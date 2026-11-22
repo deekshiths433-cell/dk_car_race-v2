@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { getCarDisplayName } from '../data/brandConfig';
 import { CAR_SPECS, TIRE_STYLES } from '../data/cars';
-import { AiSkillProfile } from '../data/difficulty';
+import { AiSkillProfile, DIFFICULTY_CURVE_CONFIG } from '../data/difficulty';
 import {
   CarDamage,
   CarId,
@@ -15,12 +15,19 @@ import { GeneratedTrack } from './TrackGenerator';
 export interface VehicleInput {
   throttle: number; // 0..1
   brake: number; // 0..1
-  steer: number; // -1..1 (left = +1 in Three.js Y-up right-handed yaw, or handled consistently)
+  steer: number; // -1..1
   handbrake: boolean;
   nitro: boolean;
 }
 
-export type AiDrivingStyle = 'clean' | 'aggressive' | 'blocker';
+export type AiDrivingStyle = 'aggressive' | 'balanced' | 'careful';
+export type AiRaceState =
+  | 'racing'
+  | 'slipstreaming'
+  | 'overtaking'
+  | 'defending'
+  | 'recovering'
+  | 'finished';
 
 export interface VehicleBody {
   id: string;
@@ -60,20 +67,42 @@ export interface VehicleBody {
   bestLapSec: number | null;
   currentLapStartSec: number;
   passedCheckpoints: Set<number>;
+  // Braking & Reverse state
+  brakePressTime: number;
+  reverseHoldTimer: number;
+  // AI properties & 25 Hz brain buffers
+  aiColor: string;
   aiTargetOffset: number;
   aiSpeedFactor: number;
   aiStyle: AiDrivingStyle;
+  aiState: AiRaceState;
   aiMatchedMaxSpeedMs?: number;
   aiMatchedBaseAccelMs2?: number;
   aiMatchedAccelMult?: number;
   aiMatchedGripMult?: number;
   aiRubberBandMult?: number;
-  aiWarmupMult: number;
   aiPackMult: number;
   aiMistakePenalty: number;
   aiMistakeTimer: number;
   aiSkill?: AiSkillProfile;
+  aiUpdateAccum: number;
+  aiCachedInput: VehicleInput;
+  aiAppliedInput: VehicleInput;
+  // Stuck detector & recovery fade
+  stuckCheckTimer: number;
+  stuckOriginPos: THREE.Vector3;
+  wrongWayTimer: number;
+  recoverFadeTimer: number;
+  carHitCooldown: number;
 }
+
+const NEUTRAL_INPUT: VehicleInput = {
+  throttle: 0,
+  brake: 0,
+  steer: 0,
+  handbrake: false,
+  nitro: false,
+};
 
 export function createVehicleBody(
   id: string,
@@ -86,12 +115,14 @@ export function createVehicleBody(
   driverName?: string,
   track?: GeneratedTrack,
   aiConfig?: {
+    aiColor?: string;
     matchedMaxSpeedMs?: number;
     matchedBaseAccelMs2?: number;
     matchedAccelMult?: number;
     matchedGripMult?: number;
     aiStyle?: AiDrivingStyle;
     aiSkill?: AiSkillProfile;
+    initialAiAccum?: number;
   }
 ): VehicleBody {
   const spec = CAR_SPECS[carId];
@@ -106,7 +137,7 @@ export function createVehicleBody(
     driverName: driverName ?? (isPlayer ? 'You' : id.toUpperCase()),
     carName,
     topSpeedKmh: aiConfig?.matchedMaxSpeedMs
-      ? Math.round(aiConfig.matchedMaxSpeedMs * 3.6)
+      ? Math.round(aiConfig.matchedMaxSpeedMs * 3.6 * aiSpeedFactor)
       : spec.stats.topSpeedKmh,
     isPlayer,
     carId,
@@ -141,19 +172,30 @@ export function createVehicleBody(
     bestLapSec: null,
     currentLapStartSec: 0,
     passedCheckpoints: new Set<number>(),
-    aiTargetOffset: (Math.random() - 0.5) * 5.2,
+    brakePressTime: 0,
+    reverseHoldTimer: 0,
+    aiColor: aiConfig?.aiColor ?? (isPlayer ? '#f59e0b' : '#38bdf8'),
+    aiTargetOffset: 0,
     aiSpeedFactor,
-    aiStyle: aiConfig?.aiStyle ?? 'clean',
+    aiStyle: aiConfig?.aiStyle ?? 'balanced',
+    aiState: 'racing',
     aiMatchedMaxSpeedMs: aiConfig?.matchedMaxSpeedMs,
     aiMatchedBaseAccelMs2: aiConfig?.matchedBaseAccelMs2,
     aiMatchedAccelMult: aiConfig?.matchedAccelMult,
     aiMatchedGripMult: aiConfig?.matchedGripMult,
     aiRubberBandMult: 1,
-    aiWarmupMult: 1,
     aiPackMult: 1,
     aiMistakePenalty: 1,
     aiMistakeTimer: 0,
     aiSkill: aiConfig?.aiSkill,
+    aiUpdateAccum: aiConfig?.initialAiAccum ?? 0,
+    aiCachedInput: { ...NEUTRAL_INPUT },
+    aiAppliedInput: { ...NEUTRAL_INPUT },
+    stuckCheckTimer: 0,
+    stuckOriginPos: startPos.clone(),
+    wrongWayTimer: 0,
+    recoverFadeTimer: 0,
+    carHitCooldown: 0,
   };
 }
 
@@ -180,6 +222,9 @@ export function stepVehiclePhysics(
 ): void {
   const stats = v.spec.stats;
   const dmgMult = level.collisionDamageMult ?? 1;
+  if (v.carHitCooldown > 0) {
+    v.carHitCooldown = Math.max(0, v.carHitCooldown - dt);
+  }
 
   // Upgrades & Damage multipliers
   const engLvl = ownedState ? ownedState.upgrades.engineLevel : 0;
@@ -196,49 +241,51 @@ export function stepVehiclePhysics(
   const weatherGrip =
     level.weather === 'snow' ? 0.72 : level.weather === 'rain' ? 0.85 : 1.0;
 
-  // Slipstream aero draft boost (up to +9% top speed, +14% drive acceleration)
-  const slipstreamSpeedMult = 1 + v.slipstreamAmount * 0.09;
+  // Slipstream aero draft boost (on straights; AI top speed stays fixed at its calculated constant)
+  const slipstreamSpeedMult = 1 + v.slipstreamAmount * 0.08;
   const slipstreamAccelMult = 1 + v.slipstreamAmount * 0.14;
 
-  // Real-world top speed in m/s (rivals use matched ceiling + warm-up + pack control + +-2% variation + fair rubber-band)
-  const aiPaceCombinedMult =
-    v.aiSpeedFactor *
-    v.aiWarmupMult *
-    v.aiPackMult *
-    (v.aiRubberBandMult ?? 1) *
-    v.aiMistakePenalty;
-
+  // Rivals maintain their steady calculated pace (`referenceSpeed * factor * variation`)
   const topSpeedBonus = 1 + engLvl * 0.018 + turboLvl * 0.012;
-  const baseMaxSpeedMs =
+  const aiConstantTopSpeedMs =
     !v.isPlayer && v.aiMatchedMaxSpeedMs
-      ? v.aiMatchedMaxSpeedMs * aiPaceCombinedMult
+      ? v.aiMatchedMaxSpeedMs * v.aiSpeedFactor
+      : null;
+
+  const baseMaxSpeedMs =
+    aiConstantTopSpeedMs !== null
+      ? aiConstantTopSpeedMs * v.aiMistakePenalty
       : (stats.topSpeedKmh / 3.6) * topSpeedBonus * engineDamagePenalty;
 
-  const maxSpeedMs = baseMaxSpeedMs * slipstreamSpeedMult;
+  const maxSpeedMs =
+    aiConstantTopSpeedMs !== null
+      ? Math.min(aiConstantTopSpeedMs, baseMaxSpeedMs)
+      : baseMaxSpeedMs * slipstreamSpeedMult;
 
-  // Acceleration calibrated from player's 0-100 km/h benchmark for AI rivals so launches match difficulty curve
+  // Acceleration calibrated from 0-100 km/h benchmark
   const baseZeroTo100Accel =
     !v.isPlayer && v.aiMatchedBaseAccelMs2
       ? v.aiMatchedBaseAccelMs2
       : (100 / 3.6) / Math.max(1.8, stats.zeroToHundredSec);
   const accelUpgrade =
     !v.isPlayer && v.aiMatchedAccelMult
-      ? v.aiMatchedAccelMult * aiPaceCombinedMult
+      ? v.aiMatchedAccelMult * v.aiSpeedFactor * v.aiMistakePenalty
       : 1 + engLvl * 0.035 + turboLvl * 0.04;
   let peakDriveAccel =
-    baseZeroTo100Accel * 1.18 * accelUpgrade * engineDamagePenalty * slipstreamAccelMult;
+    baseZeroTo100Accel * 1.16 * accelUpgrade * engineDamagePenalty * slipstreamAccelMult;
 
-  // Nitro
+  // Nitro boosts acceleration smoothly (never raises an AI rival above its fixed calculated top speed)
   if (input.nitro && v.nitro > 1 && input.throttle > 0.1) {
     v.nitroActive = true;
     v.nitro = Math.max(0, v.nitro - dt * 22);
     peakDriveAccel *= stats.nitroPower;
   } else {
     v.nitroActive = false;
-    v.nitro = Math.min(100, v.nitro + dt * (v.drifting ? 9.5 : 2.8));
+    v.nitro = Math.min(100, v.nitro + dt * (v.drifting ? 9.5 : 3.2));
   }
 
-  const effectiveMaxSpeed = v.nitroActive ? maxSpeedMs * 1.14 : maxSpeedMs;
+  const effectiveMaxSpeed =
+    v.isPlayer && v.nitroActive ? maxSpeedMs * 1.12 : maxSpeedMs;
 
   // Forward & Right vectors (Three.js: yaw=0 faces +Z)
   _fwd.set(Math.sin(v.yaw), 0, Math.cos(v.yaw));
@@ -258,37 +305,71 @@ export function stepVehiclePhysics(
   v.steerAngle = THREE.MathUtils.damp(v.steerAngle, clampedTargetSteer, steerLerpRate, dt);
 
   // Speed-dependent steering reduction for high-speed stability
-  const speedRatio = Math.min(1, Math.abs(forwardSpeed) / 75);
+  const speedRatio = Math.min(1, Math.abs(forwardSpeed) / 78);
   const steerAuthority = THREE.MathUtils.lerp(1.0, 0.36, speedRatio);
+
+  // Aero & rolling coast resistance calibrated so cars reliably reach 100% real top speed
+  const aeroDragCoeff = 0.00045;
+  const rollingCoeff = 0.28;
+  const aeroDrag = aeroDragCoeff * forwardSpeed * Math.abs(forwardSpeed);
+  const rollingDrag = rollingCoeff * Math.sign(forwardSpeed);
 
   // Longitudinal forces
   let longAccel = 0;
   if (input.throttle > 0.01) {
-    const speedFrac = Math.max(0, forwardSpeed / effectiveMaxSpeed);
-    const torqueCurve = Math.max(0.05, 1 - Math.pow(speedFrac, 1.85));
-    longAccel += input.throttle * peakDriveAccel * torqueCurve;
+    const speedFrac = THREE.MathUtils.clamp(forwardSpeed / effectiveMaxSpeed, 0, 1.02);
+    // Strong launch matching 0-100 km/h + realistic high-speed taper canceling drag cleanly at 100% top speed
+    const tractiveCurve = Math.max(0, 1 - Math.pow(Math.min(1, speedFrac), 1.45));
+    const dragCompensation =
+      forwardSpeed > 0
+        ? (aeroDrag + rollingDrag) * THREE.MathUtils.clamp(speedFrac * 1.1, 0, 1)
+        : 0;
+    longAccel += input.throttle * (peakDriveAccel * tractiveCurve + dragCompensation);
   }
 
+  // Progressive braking & 0.5s hold delay at full stop before engaging reverse
   if (input.brake > 0.01) {
-    if (forwardSpeed > 1.2) {
-      const brakePower = (16.5 + (stats.braking / 100) * 14) * (1 + brakesLvl * 0.05) * weatherGrip;
+    v.brakePressTime = Math.min(0.45, v.brakePressTime + dt);
+    const pedalRamp = THREE.MathUtils.clamp(v.brakePressTime / 0.24, 0.35, 1.0);
+
+    if (forwardSpeed > 0.65) {
+      v.reverseHoldTimer = 0;
+      // ~8.5-9.2 m/s^2 progressive braking => 100 -> 0 km/h in ~3.1-3.4 seconds
+      const brakePower =
+        (6.75 + (stats.braking / 100) * 2.15) *
+        (1 + brakesLvl * 0.04) *
+        weatherGrip *
+        pedalRamp;
       longAccel -= input.brake * brakePower;
     } else {
-      const revMax = 18;
-      if (forwardSpeed > -revMax) {
-        longAccel -= input.brake * 11.5;
+      // Stop smoothly first, then require 0.5s sustained brake hold before reversing
+      if (forwardSpeed > 0.02) {
+        longAccel -= Math.min(9.5, forwardSpeed * 12);
       }
+      if (input.brake > 0.12 && input.throttle < 0.05) {
+        v.reverseHoldTimer += dt;
+        if (v.reverseHoldTimer >= DIFFICULTY_CURVE_CONFIG.reverseHoldDelaySec) {
+          const revMax = 18;
+          if (forwardSpeed > -revMax) {
+            longAccel -= input.brake * 10.5;
+          }
+        } else if (Math.abs(forwardSpeed) <= 0.65) {
+          v.velocity.addScaledVector(_fwd, -forwardSpeed * 0.65);
+        }
+      }
+    }
+  } else {
+    v.brakePressTime = 0;
+    if (forwardSpeed >= 0) {
+      v.reverseHoldTimer = 0;
     }
   }
 
-  // Rolling resistance + quadratic aerodynamic drag
-  const aeroDrag = 0.0022 * forwardSpeed * Math.abs(forwardSpeed);
-  const rollingDrag = 0.35 * Math.sign(forwardSpeed);
-  if (Math.abs(forwardSpeed) > 0.1 || input.throttle > 0.01 || input.brake > 0.01) {
+  if (Math.abs(forwardSpeed) > 0.08 || input.throttle > 0.01 || input.brake > 0.01) {
     longAccel -= aeroDrag + (input.throttle < 0.05 ? rollingDrag : 0);
   }
 
-  // Lateral grip & drift dynamics (AI gets matched grip so corners feel competitive)
+  // Lateral grip & drift dynamics
   const rawGrip =
     !v.isPlayer && v.aiMatchedGripMult
       ? v.aiMatchedGripMult * weatherGrip
@@ -314,7 +395,7 @@ export function stepVehiclePhysics(
     v.yaw += yawRate * dt * 1.35;
   }
 
-  // Steering Assist (light or full) gently stabilizes car along track tangent
+  // Steering Assist (light or full) gently stabilizes player car along track tangent
   const nearest = track.getNearestSample(v.position, v.trackHintIndex);
   v.trackHintIndex = nearest.index;
 
@@ -323,7 +404,7 @@ export function stepVehiclePhysics(
     let yawDiff = tangentYaw - v.yaw;
     while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
     while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
-    const assistStrength = settings.steeringAssist === 'full' ? 1.9 : 0.75;
+    const assistStrength = settings.steeringAssist === 'full' ? 1.9 : 0.72;
     if (Math.abs(yawDiff) < 0.9) {
       v.yaw += yawDiff * assistStrength * dt;
     }
@@ -333,7 +414,7 @@ export function stepVehiclePhysics(
     }
   }
 
-  // Clamp total speed
+  // Clamp total speed cleanly to effective top speed
   const curSpeed = v.velocity.length();
   if (curSpeed > effectiveMaxSpeed) {
     v.velocity.multiplyScalar(effectiveMaxSpeed / curSpeed);
@@ -358,14 +439,14 @@ export function stepVehiclePhysics(
     v.position.addScaledVector(postNearest.sample.right, -sign * penetration);
 
     const outSpeed = v.velocity.dot(postNearest.sample.right) * sign;
-    if (outSpeed > 1.5) {
-      const impact = Math.min(1, outSpeed / 22);
-      v.velocity.addScaledVector(postNearest.sample.right, -sign * outSpeed * 1.35);
-      v.velocity.multiplyScalar(0.84);
+    if (outSpeed > 1.2) {
+      const impact = Math.min(1, outSpeed / 24);
+      v.velocity.addScaledVector(postNearest.sample.right, -sign * outSpeed * 1.25);
+      v.velocity.multiplyScalar(0.91 - impact * 0.07);
       if (v.isPlayer) {
-        v.damage.body = Math.min(100, v.damage.body + impact * 5.2 * dmgMult);
-        v.damage.tires = Math.min(100, v.damage.tires + impact * 2.5 * dmgMult);
-        v.damage.engine = Math.min(100, v.damage.engine + impact * 3.1 * dmgMult);
+        v.damage.body = Math.min(100, v.damage.body + impact * 4.5 * dmgMult);
+        v.damage.tires = Math.min(100, v.damage.tires + impact * 2.2 * dmgMult);
+        v.damage.engine = Math.min(100, v.damage.engine + impact * 2.6 * dmgMult);
       }
       callbacks.onCollision?.(impact, v.position);
     }
@@ -377,15 +458,15 @@ export function stepVehiclePhysics(
     if (obs.hit) continue;
     const dx = v.position.x - obs.position.x;
     const dz = v.position.z - obs.position.z;
-    if (dx * dx + dz * dz < (obs.radius + 1.1) * (obs.radius + 1.1)) {
+    if (dx * dx + dz * dz < (obs.radius + 1.05) * (obs.radius + 1.05)) {
       obs.hit = true;
       obs.mesh.visible = false;
-      v.velocity.multiplyScalar(0.82);
+      v.velocity.multiplyScalar(0.84);
       if (v.isPlayer) {
-        v.damage.body = Math.min(100, v.damage.body + 4.5 * dmgMult);
-        v.damage.tires = Math.min(100, v.damage.tires + 3.0 * dmgMult);
+        v.damage.body = Math.min(100, v.damage.body + 4.0 * dmgMult);
+        v.damage.tires = Math.min(100, v.damage.tires + 2.5 * dmgMult);
       }
-      callbacks.onCollision?.(0.6, v.position);
+      callbacks.onCollision?.(0.55, v.position);
     }
   }
 
@@ -439,7 +520,7 @@ export function stepVehiclePhysics(
     v.rpm = THREE.MathUtils.clamp(rpm + input.throttle * 380, stats.idleRpm, stats.redlineRpm);
   }
 
-  // Track Progress, Checkpoints & Lap Crossing (locked once finished so finishTimeSec & distance stay exact)
+  // Track Progress, Checkpoints & Lap Crossing (locked once finished)
   if (!v.finished) {
     const t = postNearest.sample.t;
 
@@ -481,6 +562,7 @@ export function stepVehiclePhysics(
       if (v.lapsCompleted >= level.laps) {
         v.finished = true;
         v.finishTimeSec = exactCrossTime;
+        v.aiState = 'finished';
         v.totalProgress = level.laps;
         v.trackDistanceMeters = level.laps * track.totalLength;
         v.lastT = t;
@@ -508,6 +590,28 @@ export function stepVehiclePhysics(
   }
 }
 
+/**
+ * Signed curvature helper between two track samples (radians turned divided by chord distance).
+ */
+function sampleSignedCurvature(
+  a: GeneratedTrack['samples'][number],
+  b: GeneratedTrack['samples'][number]
+): { signedKappa: number; absKappa: number } {
+  const crossY = a.tangent.z * b.tangent.x - a.tangent.x * b.tangent.z;
+  const dot = THREE.MathUtils.clamp(a.tangent.dot(b.tangent), -1, 1);
+  const angle = Math.atan2(crossY, dot);
+  const chord = Math.max(4, a.point.distanceTo(b.point));
+  const signedKappa = angle / chord;
+  return { signedKappa, absKappa: Math.abs(signedKappa) };
+}
+
+/**
+ * Skilled AI Driver Brain (runs at 25 Hz and smoothly interpolates per frame):
+ * - Out-in-out racing line (wide entry, clip apex, wide exit)
+ * - Physics-based corner braking point calculation from track curvature
+ * - Slipstreaming, inside-line/straight overtaking, defending, and side-by-side clearance
+ * - Smart nitro & corner-exit stability with distinct human-like personalities
+ */
 export function computeAiInput(
   ai: VehicleBody,
   track: GeneratedTrack,
@@ -515,38 +619,107 @@ export function computeAiInput(
   allVehicles: VehicleBody[] = []
 ): VehicleInput {
   const skill = ai.aiSkill;
-  const brakeLook = skill?.brakingLookAhead ?? 22;
-  const cornerSkill = skill?.cornerSpeedFactor ?? 1.0;
-  const slipstreamSkill = skill?.slipstreamSkill ?? 0.5;
-  const blockingChance = skill?.blockingChance ?? (level.rivalSkill >= 0.97 ? 0.5 : 0);
-  const overtakeAgg = skill?.overtakeAggression ?? 0.6;
-  const throttleMastery = skill?.throttleMastery ?? 0.96;
+  const samples = track.samples;
+  const len = Math.max(1, samples.length);
+  const sampleDist = Math.max(1.5, track.totalLength / len);
+  const curIdx = ai.trackHintIndex;
 
-  const len = Math.max(1, track.samples.length);
-  const lookAheadIdx = (ai.trackHintIndex + 10) % len;
-  const futureIdx = (ai.trackHintIndex + brakeLook) % len;
-  const apexIdx = (ai.trackHintIndex + 15) % len;
-  const targetSample = track.samples[lookAheadIdx];
-  const futureSample = track.samples[futureIdx];
-  const apexSample = track.samples[apexIdx];
+  // Personality modifiers
+  const styleAggression =
+    ai.aiStyle === 'aggressive' ? 1.12 : ai.aiStyle === 'careful' ? 0.88 : 1.0;
+  const styleCornerMult =
+    ai.aiStyle === 'aggressive' ? 1.04 : ai.aiStyle === 'careful' ? 0.95 : 1.0;
 
-  // Dynamic racing line shift into corners (hugging apex on tight curves)
-  const curveVecX = futureSample.tangent.x - targetSample.tangent.x;
-  const curveVecZ = futureSample.tangent.z - targetSample.tangent.z;
-  const turnSign =
-    targetSample.right.x * curveVecX + targetSample.right.z * curveVecZ;
-  const cornerCurvature = 1 - targetSample.tangent.dot(futureSample.tangent);
-  const roadHalf = track.roadWidth * 0.34;
+  const slipstreamSkill = skill?.slipstreamSkill ?? 0.55;
+  const blockingChance =
+    ai.aiStyle === 'careful'
+      ? 0.08
+      : skill?.blockingChance ?? (level.levelNumber >= 3 ? 0.45 : 0);
+  const overtakeAgg = (skill?.overtakeAggression ?? 0.65) * styleAggression;
+  const cornerSkill = (skill?.cornerSpeedFactor ?? 1.0) * styleCornerMult;
 
-  let desiredLatOffset = ai.aiTargetOffset * (0.55 - (skill?.skillNorm ?? 0) * 0.25);
-  if (cornerCurvature > 0.08) {
-    const apexCommitment = 0.35 + (skill?.skillNorm ?? 0.3) * 0.25;
-    desiredLatOffset =
-      Math.sign(turnSign) * Math.min(roadHalf, roadHalf * (apexCommitment + cornerCurvature * 1.35));
+  // 1. Speed-proportional spline steering lookahead (~11m on hairpins, ~24m on straights) so AI never cuts walls
+  const steerAheadMeters = THREE.MathUtils.clamp(Math.max(10.5, ai.speedMs * 0.44), 10.5, 25);
+  const steerSamples = Math.max(2, Math.round(steerAheadMeters / sampleDist));
+  const steerIdx = (curIdx + steerSamples) % len;
+  const steerSample = samples[steerIdx];
+
+  // 2. Scan upcoming corner curvature at entry (~20m), apex (~40m), and braking horizon (~30..105m)
+  const localSpan = Math.max(3, Math.round(18 / sampleDist));
+  const nearA = samples[(curIdx + Math.round(6 / sampleDist)) % len];
+  const nearB = samples[(curIdx + Math.round(24 / sampleDist)) % len];
+  const localCurv = sampleSignedCurvature(nearA, nearB);
+
+  const entryA = samples[(curIdx + Math.round(20 / sampleDist)) % len];
+  const entryB = samples[(curIdx + Math.round(44 / sampleDist)) % len];
+  const upcomingCurv = sampleSignedCurvature(entryA, entryB);
+
+  const prevA = samples[(curIdx - Math.round(14 / sampleDist) + len) % len];
+  const prevB = samples[(curIdx + Math.round(4 / sampleDist)) % len];
+  const exitCurv = sampleSignedCurvature(prevA, prevB);
+
+  // Determine physical braking horizon speed limit along the upcoming 22m..110m window
+  const weatherGrip = level.weather === 'snow' ? 0.72 : level.weather === 'rain' ? 0.85 : 1.0;
+  const lateralGripAccel = (ai.aiMatchedGripMult ?? 1.08) * weatherGrip * 19.2 * cornerSkill;
+  const brakeHorizonM = THREE.MathUtils.clamp(
+    18 + (ai.speedMs * ai.speedMs) / 14.5,
+    24,
+    115
+  );
+  const brakeWindowSteps = Math.max(3, Math.round(brakeHorizonM / sampleDist));
+
+  let maxFutureKappa = localCurv.absKappa;
+  let desiredSafeSpeedMs = 999;
+
+  for (let step = 2; step <= brakeWindowSteps; step += 2) {
+    const sA = samples[(curIdx + step) % len];
+    const sB = samples[(curIdx + step + localSpan) % len];
+    const { absKappa } = sampleSignedCurvature(sA, sB);
+    if (absKappa > maxFutureKappa) maxFutureKappa = absKappa;
+
+    if (absKappa > 0.0045) {
+      const distAheadM = step * sampleDist;
+      const apexSpeedMs = Math.sqrt(lateralGripAccel / absKappa);
+      // Kinematic braking envelope: v_now <= sqrt(v_apex^2 + 2 * comfortDecel * distAhead)
+      const comfortDecel = 8.4 * weatherGrip;
+      const entryAllowMs = Math.sqrt(apexSpeedMs * apexSpeedMs + 2 * comfortDecel * distAheadM);
+      if (entryAllowMs < desiredSafeSpeedMs) {
+        desiredSafeSpeedMs = entryAllowMs;
+      }
+    }
   }
 
-  // Slipstream drafting on straights, overtaking, and defensive blocking
-  let draftTargetLat: number | null = null;
+  // 3. Out-In-Out Racing Line
+  const safeHalfWidth = track.roadWidth * 0.5 - 1.55;
+  let racingLineLat = 0;
+
+  if (localCurv.absKappa > 0.0075) {
+    // Currently rounding corner: clip the inside apex!
+    const apexAmt = THREE.MathUtils.clamp(localCurv.absKappa * 26, 0.35, 0.88);
+    racingLineLat = Math.sign(localCurv.signedKappa) * safeHalfWidth * apexAmt;
+  } else if (upcomingCurv.absKappa > 0.008) {
+    // Approaching corner ahead: swing wide to the outside for late braking & wide entry!
+    const entryAmt = THREE.MathUtils.clamp(upcomingCurv.absKappa * 22, 0.35, 0.82);
+    racingLineLat = -Math.sign(upcomingCurv.signedKappa) * safeHalfWidth * entryAmt;
+  } else if (exitCurv.absKappa > 0.008) {
+    // Exiting a corner: run wide smoothly onto exit curb to carry exit speed!
+    const exitAmt = THREE.MathUtils.clamp(exitCurv.absKappa * 18, 0.25, 0.7);
+    racingLineLat = -Math.sign(exitCurv.signedKappa) * safeHalfWidth * exitAmt;
+  }
+
+  // Blend in slight individual preference on dead straights
+  let desiredLatOffset = racingLineLat + ai.aiTargetOffset * 0.15;
+  let nextState: AiRaceState = 'racing';
+
+  // 4. Traffic Racecraft: Slipstream, Inside Overtake, Side-by-Side Room, and Defense
+  const myNearest = track.getNearestSample(ai.position, curIdx);
+  const myLat = myNearest.lateralOffset;
+
+  let carAheadToDraft: { fwdDist: number; lat: number } | null = null;
+  let carAheadToPass: { fwdDist: number; lat: number; speedDiff: number } | null = null;
+  let sideBySideCar: { lat: number } | null = null;
+  let chaserBehind: { fwdDist: number; lat: number } | null = null;
+
   for (let i = 0; i < allVehicles.length; i++) {
     const other = allVehicles[i];
     if (other.id === ai.id || other.finished) continue;
@@ -554,77 +727,144 @@ export function computeAiInput(
     const dx = other.position.x - ai.position.x;
     const dz = other.position.z - ai.position.z;
     const distSq = dx * dx + dz * dz;
-    if (distSq > 1156) continue; // > 34m
+    if (distSq > 1225) continue; // > 35m
 
-    const forwardDot = dx * targetSample.tangent.x + dz * targetSample.tangent.z;
-    const latDelta = dx * targetSample.right.x + dz * targetSample.right.z;
+    const fwdDot = dx * steerSample.tangent.x + dz * steerSample.tangent.z;
+    const otherNearest = track.getNearestSample(other.position, other.trackHintIndex);
+    const otherLat = otherNearest.lateralOffset;
+    const latGap = Math.abs(otherLat - myLat);
 
-    // Smart slipstream seek on straights when slightly behind another car
-    if (
-      cornerCurvature < 0.07 &&
-      slipstreamSkill > 0.25 &&
-      forwardDot > 9 &&
-      forwardDot < 32 &&
-      Math.abs(latDelta) < 6.5 &&
-      ai.aiPackMult >= 0.99
-    ) {
-      const otherNearest = track.getNearestSample(other.position, other.trackHintIndex);
-      draftTargetLat = otherNearest.lateralOffset;
+    // Side-by-side car check (must leave clean room so AI never drives into a car alongside!)
+    if (Math.abs(fwdDot) < 6.8 && latGap < 4.5) {
+      sideBySideCar = { lat: otherLat };
     }
 
-    // Overtake slower car directly ahead (decisiveness scales with overtakeAggression)
-    if (forwardDot > 2.2 && forwardDot < 23 && Math.abs(latDelta) < 3.1) {
-      const avoidDir = latDelta >= 0 ? -1 : 1;
-      desiredLatOffset += avoidDir * (2.6 + overtakeAgg * 1.4);
-      draftTargetLat = null;
+    // Traffic ahead in same corridor
+    if (fwdDot > 2.2 && fwdDot < 30 && latGap < 5.0) {
+      const speedDiff = ai.speedMs - other.speedMs;
+      if (fwdDot < 13.5 || speedDiff > 2.0) {
+        if (!carAheadToPass || fwdDot < carAheadToPass.fwdDist) {
+          carAheadToPass = { fwdDist: fwdDot, lat: otherLat, speedDiff };
+        }
+      } else if (
+        maxFutureKappa < 0.0045 &&
+        fwdDot >= 11 &&
+        fwdDot < 30 &&
+        slipstreamSkill > 0.25
+      ) {
+        if (!carAheadToDraft || fwdDot < carAheadToDraft.fwdDist) {
+          carAheadToDraft = { fwdDist: fwdDot, lat: otherLat };
+        }
+      }
     }
 
-    // Defensive blocking on Level 3+ against charging player behind
-    if (
-      other.isPlayer &&
-      (ai.aiStyle === 'blocker' || blockingChance > 0.2) &&
-      forwardDot < -2.8 &&
-      forwardDot > -18 &&
-      Math.abs(latDelta) < 4.5
-    ) {
-      const blockStrength = ai.aiStyle === 'blocker' ? 1.55 : 0.75 + blockingChance * 0.95;
+    // Charging opponent close behind on approach
+    if (fwdDot < -2.8 && fwdDot > -15 && other.speedMs > ai.speedMs - 1.5) {
+      if (!chaserBehind || fwdDot > chaserBehind.fwdDist) {
+        chaserBehind = { fwdDist: fwdDot, lat: otherLat };
+      }
+    }
+  }
+
+  if (carAheadToPass && !ai.finished) {
+    // Pick clear inside line when approaching a turn, otherwise widest clear lane
+    const preferRight =
+      upcomingCurv.absKappa > 0.005
+        ? Math.sign(upcomingCurv.signedKappa) > 0
+        : carAheadToPass.lat <= 0;
+    const passDir =
+      Math.abs(carAheadToPass.lat) > safeHalfWidth * 0.45
+        ? -Math.sign(carAheadToPass.lat)
+        : preferRight
+          ? 1
+          : -1;
+    const passLane = THREE.MathUtils.clamp(
+      carAheadToPass.lat + passDir * (3.25 + overtakeAgg * 0.65),
+      -safeHalfWidth,
+      safeHalfWidth
+    );
+    desiredLatOffset = passLane;
+    nextState = 'overtaking';
+  } else if (carAheadToDraft && !ai.finished) {
+    desiredLatOffset = THREE.MathUtils.lerp(
+      desiredLatOffset,
+      carAheadToDraft.lat,
+      0.65 + slipstreamSkill * 0.3
+    );
+    nextState = 'slipstreaming';
+  } else if (
+    chaserBehind &&
+    !ai.finished &&
+    level.levelNumber >= 3 &&
+    blockingChance > 0.25 &&
+    maxFutureKappa < 0.006
+  ) {
+    // Move cleanly once toward inside defensive line while always leaving space outside
+    const insideDir =
+      upcomingCurv.absKappa > 0.004
+        ? Math.sign(upcomingCurv.signedKappa)
+        : Math.sign(chaserBehind.lat || 1);
+    const defLat = THREE.MathUtils.clamp(
+      insideDir * safeHalfWidth * 0.52,
+      -safeHalfWidth,
+      safeHalfWidth
+    );
+    desiredLatOffset = THREE.MathUtils.lerp(desiredLatOffset, defLat, 0.72);
+    nextState = 'defending';
+  }
+
+  // Enforce side-by-side racing space so cars battle wheel-to-wheel without colliding intentionally
+  if (sideBySideCar) {
+    const minSideClearance = 3.15;
+    if (Math.abs(desiredLatOffset - sideBySideCar.lat) < minSideClearance) {
+      const pushSide = myLat >= sideBySideCar.lat ? 1 : -1;
       desiredLatOffset = THREE.MathUtils.clamp(
-        desiredLatOffset + Math.sign(latDelta) * blockStrength,
-        -roadHalf,
-        roadHalf
+        sideBySideCar.lat + pushSide * minSideClearance,
+        -safeHalfWidth,
+        safeHalfWidth
       );
     }
   }
 
-  if (draftTargetLat !== null) {
-    desiredLatOffset = THREE.MathUtils.lerp(desiredLatOffset, draftTargetLat, slipstreamSkill * 0.72);
-  }
-
-  // Dodge upcoming track obstacles
+  // 5. Dodge track obstacles cleanly
   for (let i = 0; i < track.obstacles.length; i++) {
     const obs = track.obstacles[i];
     if (obs.hit) continue;
     const dx = obs.position.x - ai.position.x;
     const dz = obs.position.z - ai.position.z;
-    const distSq = dx * dx + dz * dz;
-    if (distSq > 576) continue;
-    const fwdDist = dx * targetSample.tangent.x + dz * targetSample.tangent.z;
-    const latDist = dx * targetSample.right.x + dz * targetSample.right.z;
-    if (fwdDist > 2 && fwdDist < 22 && Math.abs(latDist) < 2.6) {
-      desiredLatOffset += (latDist >= 0 ? -1 : 1) * 3.2;
+    if (dx * dx + dz * dz > 625) continue;
+    const fwdDist = dx * steerSample.tangent.x + dz * steerSample.tangent.z;
+    const obsLat =
+      (obs.position.x - samples[curIdx].point.x) * samples[curIdx].right.x +
+      (obs.position.z - samples[curIdx].point.z) * samples[curIdx].right.z;
+    if (fwdDist > 1.5 && fwdDist < 26 && Math.abs(desiredLatOffset - obsLat) < 2.6) {
+      const dodgeSide = obsLat >= 0 ? -1 : 1;
+      desiredLatOffset = THREE.MathUtils.clamp(
+        obsLat + dodgeSide * 3.1,
+        -safeHalfWidth,
+        safeHalfWidth
+      );
     }
   }
 
-  // Subtle corner wobble if rival is currently having a minor driving mistake
+  // Subtle corner wobble ONLY during rare low-level mistakes
   if (ai.aiMistakePenalty < 0.99) {
-    desiredLatOffset += Math.sin(ai.trackDistanceMeters * 0.15) * 1.1;
+    desiredLatOffset += Math.sin(ai.trackDistanceMeters * 0.14) * 0.95;
   }
 
-  desiredLatOffset = THREE.MathUtils.clamp(desiredLatOffset, -roadHalf, roadHalf);
+  desiredLatOffset = THREE.MathUtils.clamp(desiredLatOffset, -safeHalfWidth, safeHalfWidth);
 
+  if (ai.finished) {
+    nextState = 'finished';
+  } else if (ai.recoverFadeTimer > 0) {
+    nextState = 'recovering';
+  }
+  ai.aiState = nextState;
+
+  // 6. Compute world target & steering angle
   const targetPos = _steerVec
-    .copy(apexSample.point)
-    .addScaledVector(apexSample.right, desiredLatOffset);
+    .copy(steerSample.point)
+    .addScaledVector(steerSample.right, desiredLatOffset);
 
   const dx = targetPos.x - ai.position.x;
   const dz = targetPos.z - ai.position.z;
@@ -634,83 +874,161 @@ export function computeAiInput(
   while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
   while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
 
-  const steerGain = 1.72 + (skill?.skillNorm ?? 0.3) * 0.35;
+  const steerGain = 1.85 + (skill?.skillNorm ?? 0.35) * 0.3;
   const steer = THREE.MathUtils.clamp(-yawDiff * steerGain, -1, 1);
 
-  // Corner braking calibrated to level skill, curvature, and speed
-  const baseSafeCornerSpeed =
-    cornerCurvature > 0.34 ? 142 : cornerCurvature > 0.2 ? 192 : cornerCurvature > 0.11 ? 245 : 999;
-  const safeCornerSpeed = baseSafeCornerSpeed * cornerSkill;
-  const cornerBrake =
-    ai.speedKmh > safeCornerSpeed
-      ? THREE.MathUtils.clamp((ai.speedKmh - safeCornerSpeed) / 55, 0.25, 0.72)
-      : 0;
-  const throttle = cornerBrake > 0 ? 0.22 : throttleMastery * ai.aiMistakePenalty;
+  // 7. Smooth Throttle, Progressive Braking & Corner-Exit Handbrake Feathering
+  const speedExcessMs = ai.speedMs - desiredSafeSpeedMs;
+  let brake = 0;
+  let throttle = 1.0;
 
+  if (speedExcessMs > 1.0) {
+    brake = THREE.MathUtils.clamp(speedExcessMs / 9.5, 0.18, 0.88);
+    throttle = 0.08;
+  } else if (speedExcessMs > -2.5 && localCurv.absKappa > 0.014) {
+    // Trail-feather throttle through apex so tires maintain lateral grip cleanly
+    throttle = ai.aiStyle === 'aggressive' ? 0.82 : 0.72;
+  } else {
+    throttle = THREE.MathUtils.clamp(
+      (skill?.throttleMastery ?? 0.98) * ai.aiMistakePenalty,
+      0.92,
+      1.0
+    );
+  }
+
+  // Helpful subtle drift rotation only on sharp hairpins when rotating into the apex
+  const useDriftHelp =
+    localCurv.absKappa > 0.024 &&
+    Math.abs(yawDiff) > 0.36 &&
+    ai.speedMs > desiredSafeSpeedMs * 0.92 &&
+    ai.aiStyle === 'aggressive';
+
+  // Smart nitro usage on straights or exits (AI speed strictly remains capped at calculated constant!)
   const useNitro =
-    cornerCurvature < 0.045 &&
-    ai.nitro > 38 &&
-    ai.aiPackMult >= 0.99 &&
-    (ai.slipstreamAmount > 0.25 || level.rivalSkill >= 1.0 || ai.aiStyle === 'aggressive');
+    !ai.finished &&
+    brake < 0.05 &&
+    maxFutureKappa < 0.0038 &&
+    ai.nitro > 32 &&
+    (nextState === 'overtaking' ||
+      nextState === 'slipstreaming' ||
+      ai.speedKmh < ai.topSpeedKmh * 0.88);
 
   return {
     throttle,
-    brake: cornerBrake,
+    brake,
     steer,
-    handbrake: false,
+    handbrake: useDriftHelp,
     nitro: useNitro,
   };
 }
 
+/**
+ * Oriented two-sphere (front axle + rear axle) bumper collision resolver:
+ * Realistic bumper nudges and side-by-side rubbing without flipping, sticking, or overlapping.
+ */
 export function resolveCarToCarCollisions(
   vehicles: VehicleBody[],
-  onPlayerHit?: (intensity: number, pos: THREE.Vector3) => void,
+  onCarHit?: (intensity: number, pos: THREE.Vector3, involvesPlayer: boolean) => void,
   collisionDamageMult = 1
 ): void {
-  const minDist = 2.65;
+  const sphereRadius = 1.02;
+  const minDist = sphereRadius * 2;
   const minDistSq = minDist * minDist;
+  const axleOffset = 1.15;
 
   for (let i = 0; i < vehicles.length; i++) {
+    const a = vehicles[i];
+    if (a.finished) continue;
+    const aFwdX = Math.sin(a.yaw);
+    const aFwdZ = Math.cos(a.yaw);
+
     for (let j = i + 1; j < vehicles.length; j++) {
-      const a = vehicles[i];
       const b = vehicles[j];
-      if (a.finished || b.finished) continue;
-      const dx = b.position.x - a.position.x;
-      const dz = b.position.z - a.position.z;
-      const dSq = dx * dx + dz * dz;
+      if (b.finished) continue;
 
-      if (dSq > 0.001 && dSq < minDistSq) {
-        const dist = Math.sqrt(dSq);
-        const nx = dx / dist;
-        const nz = dz / dist;
-        const overlap = (minDist - dist) * 0.5;
+      // Quick center-distance broadphase (< 5.2m)
+      const cdx = b.position.x - a.position.x;
+      const cdz = b.position.z - a.position.z;
+      if (cdx * cdx + cdz * cdz > 27.04) continue;
 
-        a.position.x -= nx * overlap;
-        a.position.z -= nz * overlap;
-        b.position.x += nx * overlap;
-        b.position.z += nz * overlap;
+      const bFwdX = Math.sin(b.yaw);
+      const bFwdZ = Math.cos(b.yaw);
+
+      let deepestPen = 0;
+      let bestNx = 0;
+      let bestNz = 0;
+      let bestCx = (a.position.x + b.position.x) * 0.5;
+      let bestCz = (a.position.z + b.position.z) * 0.5;
+
+      // Test front & rear bumper spheres of both cars
+      for (const sa of [-axleOffset, axleOffset]) {
+        const ax = a.position.x + aFwdX * sa;
+        const az = a.position.z + aFwdZ * sa;
+        for (const sb of [-axleOffset, axleOffset]) {
+          const bx = b.position.x + bFwdX * sb;
+          const bz = b.position.z + bFwdZ * sb;
+          const dx = bx - ax;
+          const dz = bz - az;
+          const dSq = dx * dx + dz * dz;
+          if (dSq < minDistSq && dSq > 0.0001) {
+            const d = Math.sqrt(dSq);
+            const pen = minDist - d;
+            if (pen > deepestPen) {
+              deepestPen = pen;
+              bestNx = dx / d;
+              bestNz = dz / d;
+              bestCx = (ax + bx) * 0.5;
+              bestCz = (az + bz) * 0.5;
+            }
+          }
+        }
+      }
+
+      if (deepestPen > 0.001) {
+        const push = deepestPen * 0.52;
+        a.position.x -= bestNx * push;
+        a.position.z -= bestNz * push;
+        b.position.x += bestNx * push;
+        b.position.z += bestNz * push;
 
         const rvx = b.velocity.x - a.velocity.x;
         const rvz = b.velocity.z - a.velocity.z;
-        const relVelAlongNormal = rvx * nx + rvz * nz;
+        const relVelAlongNormal = rvx * bestNx + rvz * bestNz;
 
         if (relVelAlongNormal < 0) {
-          const impulse = -relVelAlongNormal * 0.72;
-          a.velocity.x -= nx * impulse;
-          a.velocity.z -= nz * impulse;
-          b.velocity.x += nx * impulse;
-          b.velocity.z += nz * impulse;
+          // Mild bumper impulse (keeps wheel-to-wheel racing physical & never flings cars)
+          const impulse = -relVelAlongNormal * 0.62;
+          a.velocity.x -= bestNx * impulse;
+          a.velocity.z -= bestNz * impulse;
+          b.velocity.x += bestNx * impulse;
+          b.velocity.z += bestNz * impulse;
 
-          const intensity = Math.min(1, Math.abs(relVelAlongNormal) / 18);
-          if ((a.isPlayer || b.isPlayer) && intensity > 0.15) {
-            const p = a.isPlayer ? a : b;
-            p.damage.body = Math.min(100, p.damage.body + intensity * 4.2 * collisionDamageMult);
-            p.damage.engine = Math.min(100, p.damage.engine + intensity * 2.1 * collisionDamageMult);
-            onPlayerHit?.(intensity, p.position);
+          const intensity = Math.min(1, Math.abs(relVelAlongNormal) / 20);
+          if (intensity > 0.12 && (a.carHitCooldown <= 0 || b.carHitCooldown <= 0)) {
+            a.carHitCooldown = 0.25;
+            b.carHitCooldown = 0.25;
+
+            const contactPos = _steerVec.set(
+              bestCx,
+              (a.position.y + b.position.y) * 0.5 + 0.45,
+              bestCz
+            );
+
+            // Realistic small 1-3% damage per contact
+            const bodyDmg = THREE.MathUtils.clamp(1.0 + intensity * 2.0, 1.0, 3.0) * collisionDamageMult;
+            if (a.isPlayer) {
+              a.damage.body = Math.min(100, a.damage.body + bodyDmg);
+              a.damage.engine = Math.min(100, a.damage.engine + bodyDmg * 0.45);
+            }
+            if (b.isPlayer) {
+              b.damage.body = Math.min(100, b.damage.body + bodyDmg);
+              b.damage.engine = Math.min(100, b.damage.engine + bodyDmg * 0.45);
+            }
+
+            onCarHit?.(intensity, contactPos, a.isPlayer || b.isPlayer);
           }
         }
       }
     }
   }
 }
-

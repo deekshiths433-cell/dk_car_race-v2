@@ -10,7 +10,6 @@ import {
   AiSkillProfile,
   computeAiSkillProfile,
   computeMatchedRivalStats,
-  computeRivalWarmupFactor,
   DIFFICULTY_CURVE_CONFIG,
 } from '../data/difficulty';
 import { BIOME_META } from '../data/levels';
@@ -44,6 +43,7 @@ import { createSafeWebGLRenderer, probeWebGL } from './webglSupport';
 import {
   buildRaceStandings,
   calculatePlayerPosition,
+  compareStandings,
   computePositionPoints,
 } from '../utils/raceStandings';
 import {
@@ -151,6 +151,10 @@ export class RaceEngine {
   private fpsSamples: number[] = [];
   private lastBeepStep = 4;
   private raceFinished = false;
+  private prevPlayerPosition = 1;
+  private passNotice: { text: string; type: 'overtake' | 'overtaken' } | null = null;
+  private passNoticeTimer = 0;
+  private _projVec = new THREE.Vector3();
 
   // Personal-best Ghost state (zero-GC during loop)
   private ghostConfig: GhostConfig | null = null;
@@ -423,28 +427,32 @@ export class RaceEngine {
       [aiPalette[i], aiPalette[j]] = [aiPalette[j], aiPalette[i]];
     }
 
-    const styles: AiDrivingStyle[] = ['clean', 'aggressive', 'blocker'];
+    const styles: AiDrivingStyle[] = ['aggressive', 'balanced', 'careful'];
     const playerIdx = CAR_ORDER.indexOf(playerCarId);
+    const aiStepSec = 1 / DIFFICULTY_CURVE_CONFIG.aiUpdateHz;
 
     for (let slot = 0; slot < totalCars; slot++) {
-      const isPlayer = slot === totalCars - 1;
+      // Player starts Front-Left staggered slot (P1), every rival visibly next to or behind in staggered slots
+      const isPlayer = slot === 0;
       const row = Math.floor(slot / 2);
       const col = slot % 2 === 0 ? -1 : 1;
-      const backDist = 6 + row * 7.5;
-      const latDist = col * 3.1;
+      const backDist = 5.8 + row * 5.2 + (col === 1 ? 1.8 : 0);
+      const latDist = col * 2.55;
 
       const pos = startSample.point
         .clone()
         .addScaledVector(startSample.tangent, -backDist)
         .addScaledVector(startSample.right, latDist);
 
-      // Pick varied supercar models anchored around the player's car tier + surprise faster/slower picks
+      // Pick varied supercar models anchored around the player's car tier
       const tierOffset = Math.floor(nextRand() * 7) - 3;
       const pickedIdx = Math.max(0, Math.min(CAR_ORDER.length - 1, playerIdx + tierOffset));
       const carId = isPlayer ? playerCarId : CAR_ORDER[pickedIdx];
       const spec = CAR_SPECS[carId];
 
-      const paintHex = aiPalette[slot % aiPalette.length];
+      const paintHex = isPlayer
+        ? this.ownedCarState.customization.paintColor
+        : aiPalette[slot % aiPalette.length];
       const customization = isPlayer
         ? this.ownedCarState.customization
         : {
@@ -463,12 +471,7 @@ export class RaceEngine {
           };
 
       const variation = 1 + (nextRand() * 2 - 1) * AI_RIVAL_VARIATION_RANGE;
-      const aiStyle =
-        this.level.levelNumber >= 3
-          ? styles[slot % styles.length]
-          : nextRand() > 0.4
-            ? 'clean'
-            : 'aggressive';
+      const aiStyle = styles[slot % styles.length];
 
       const body = createVehicleBody(
         isPlayer ? 'player' : `ai_${slot}`,
@@ -483,19 +486,22 @@ export class RaceEngine {
         isPlayer
           ? undefined
           : {
+              aiColor: paintHex,
               matchedMaxSpeedMs: matched.rivalTargetTopSpeedKmh / 3.6,
               matchedBaseAccelMs2: matched.rivalBaseAccelMs2,
               matchedAccelMult: matched.rivalAccelScale,
               matchedGripMult: matched.rivalGripScale,
               aiStyle,
               aiSkill: this.aiSkillProfile,
+              initialAiAccum: ((slot - 1) / Math.max(1, this.level.rivalCount)) * aiStepSec,
             }
       );
 
+      // Identical full car quality for player and all rivals (never hide or downgrade rivals with LOD)
       const rig = buildSupercarModel(carId, customization, {
         enableSpotLights: isPlayer && !this.isSoftwareGl,
         isPlayer,
-        useLod: !isPlayer,
+        useLod: false,
       });
       rig.root.position.copy(pos);
       rig.root.rotation.y = startYaw;
@@ -508,6 +514,16 @@ export class RaceEngine {
         this.playerRig = rig;
       }
     }
+
+    this.prevPlayerPosition = calculatePlayerPosition(this.vehicles);
+
+    const rivalSpeedSummary = this.vehicles
+      .filter((v) => !v.isPlayer)
+      .map((v) => `${v.driverName}(${v.aiStyle})=${v.topSpeedKmh}km/h(${((v.aiSpeedFactor - 1) * 100 >= 0 ? '+' : '') + ((v.aiSpeedFactor - 1) * 100).toFixed(1)}%)`)
+      .join(', ');
+    console.log(
+      `[DK Car Race][Pace] Level ${this.level.levelNumber} (${matched.difficultyName}) | Your car: ${matched.playerEffectiveTopSpeedKmh} km/h (stock ${matched.playerBaseTopSpeedKmh}, ref ${matched.referenceTopSpeedKmh}). Rivals: ${matched.rivalTargetTopSpeedKmh} km/h (factor ${matched.difficultyFactor.toFixed(2)}) | Fixed grid: ${rivalSpeedSummary}`
+    );
 
     // Snap initial camera behind player
     const fwd = new THREE.Vector3(Math.sin(startYaw), 0, Math.cos(startYaw));
@@ -711,10 +727,61 @@ export class RaceEngine {
 
   public resetPlayerToTrack(): void {
     const nearest = this.track.getNearestSample(this.playerBody.position, this.playerBody.trackHintIndex);
-    this.playerBody.position.copy(nearest.sample.point);
+    // Offset slightly laterally if an AI rival is occupying the centerline spot
+    let latOffset = 0;
+    for (const v of this.vehicles) {
+      if (v.isPlayer) continue;
+      if (v.position.distanceToSquared(nearest.sample.point) < 16) {
+        latOffset = latOffset <= 0 ? 2.8 : -2.8;
+      }
+    }
+    this.playerBody.position
+      .copy(nearest.sample.point)
+      .addScaledVector(nearest.sample.right, latOffset);
     this.playerBody.yaw = Math.atan2(nearest.sample.tangent.x, nearest.sample.tangent.z);
     this.playerBody.velocity.set(0, 0, 0);
     this.playerBody.angularVel = 0;
+    this.playerBody.reverseHoldTimer = 0;
+  }
+
+  private respawnAiToClearTrack(v: VehicleBody, reason: string): void {
+    const nearest = this.track.getNearestSample(v.position, v.trackHintIndex);
+    const tangentYaw = Math.atan2(nearest.sample.tangent.x, nearest.sample.tangent.z);
+
+    // Pick a lateral offset that does not overlap another racer
+    const candidateLats = [0, -3.1, 3.1, -5.2, 5.2];
+    let chosenLat = 0;
+    for (const lat of candidateLats) {
+      const candidatePos = this._v1
+        .copy(nearest.sample.point)
+        .addScaledVector(nearest.sample.right, lat);
+      const blocked = this.vehicles.some(
+        (other) => other.id !== v.id && other.position.distanceToSquared(candidatePos) < 14
+      );
+      if (!blocked) {
+        chosenLat = lat;
+        break;
+      }
+    }
+
+    console.warn(
+      `[DK Car Race][AI Stuck] Recovering ${v.driverName} (${v.carName}) | Reason: ${reason} | Track sample #${nearest.index}, lat=${chosenLat.toFixed(1)}m`
+    );
+
+    v.position
+      .copy(nearest.sample.point)
+      .addScaledVector(nearest.sample.right, chosenLat);
+    v.yaw = tangentYaw;
+    v.angularVel = 0;
+    v.steerAngle = 0;
+    // Gentle rolling forward recovery so car clears walls immediately without blocking traffic
+    v.velocity.copy(nearest.sample.tangent).multiplyScalar(14);
+    v.trackHintIndex = nearest.index;
+    v.stuckCheckTimer = 0;
+    v.wrongWayTimer = 0;
+    v.stuckOriginPos.copy(v.position);
+    v.recoverFadeTimer = DIFFICULTY_CURVE_CONFIG.stuckFadeSec;
+    v.aiState = 'recovering';
   }
 
   private handleContextLost = (e: Event): void => {
@@ -902,6 +969,11 @@ export class RaceEngine {
       if (this.checkpointNoticeTimer <= 0) this.checkpointNotice = null;
     }
 
+    if (this.passNoticeTimer > 0) {
+      this.passNoticeTimer -= dt;
+      if (this.passNoticeTimer <= 0) this.passNotice = null;
+    }
+
     // Countdown sequence (3 -> 2 -> 1 -> GO!)
     if (this.countdown >= 0) {
       this.countdownTimer += dt;
@@ -934,23 +1006,6 @@ export class RaceEngine {
       if (!this.raceFinished) {
         this.playerMistakeTimer = Math.max(0, this.playerMistakeTimer - dt);
 
-        // Detect spin-outs, wrong-way driving, or heavy post-launch slowdowns as player mistakes
-        const pNearest = this.track.samples[this.playerBody.trackHintIndex];
-        const pFwdDot =
-          Math.sin(this.playerBody.yaw) * pNearest.tangent.x +
-          Math.cos(this.playerBody.yaw) * pNearest.tangent.z;
-        const slowCrawlThreshold = Math.max(55, this.playerBody.spec.stats.topSpeedKmh * 0.42);
-        if (
-          this.playerBody.slipRatio > 0.68 ||
-          (pFwdDot < -0.25 && this.playerBody.speedKmh > 12) ||
-          (this.raceTimeSec > 4.8 && this.playerBody.speedKmh < slowCrawlThreshold)
-        ) {
-          this.playerMistakeTimer = Math.max(
-            this.playerMistakeTimer,
-            DIFFICULTY_CURVE_CONFIG.playerMistakeDurationSec * 0.75
-          );
-        }
-
         // Track nitro activations
         if (this.playerBody.nitroActive && !this.wasNitroActive) {
           this.nitroUses++;
@@ -963,12 +1018,8 @@ export class RaceEngine {
         }
       }
 
-      // Compute Slipstream aero draft, Lv1-2 pack discipline, warm-up curve & light fair rubber-banding
-      const playerDist = this.playerBody.trackDistanceMeters;
-      const isPackDisciplineLevel =
-        this.level.levelNumber <= DIFFICULTY_CURVE_CONFIG.packMaxLevel &&
-        this.settings.difficultySetting !== 'hard';
-
+      // Compute Slipstream aero draft & subtle rookie error simulation (without altering top speed!)
+      const aiStepSec = 1 / DIFFICULTY_CURVE_CONFIG.aiUpdateHz;
       for (let i = 0; i < this.vehicles.length; i++) {
         const v = this.vehicles[i];
         const vFwdX = Math.sin(v.yaw);
@@ -996,64 +1047,50 @@ export class RaceEngine {
         v.slipstreamAmount = THREE.MathUtils.damp(v.slipstreamAmount, maxDraft, 7, dt);
 
         if (!v.isPlayer && !v.finished) {
-          // 1. In-race warm-up (~95% on Lap 1 -> 100% by final lap)
-          v.aiWarmupMult = computeRivalWarmupFactor(
-            this.level.levelNumber,
-            Math.max(0, v.totalProgress),
-            this.level.laps
-          );
-
-          // 2. Rookie-to-Pro AI mistake simulation (gradually disappears at higher levels)
+          // Rare subtle human error ONLY on low levels (<= 3), never slows overall race pace unfairly
           if (v.aiMistakeTimer > 0) {
             v.aiMistakeTimer = Math.max(0, v.aiMistakeTimer - dt);
-            v.aiMistakePenalty = 0.92;
+            v.aiMistakePenalty = 0.96;
           } else {
-            v.aiMistakePenalty = THREE.MathUtils.damp(v.aiMistakePenalty, 1.0, 4, dt);
+            v.aiMistakePenalty = THREE.MathUtils.damp(v.aiMistakePenalty, 1.0, 5, dt);
             if (
-              this.raceTimeSec > 6 &&
-              v.speedKmh > 130 &&
-              Math.random() < this.aiSkillProfile.mistakeRate * 0.12 * dt
+              this.level.levelNumber <= 3 &&
+              this.raceTimeSec > 8 &&
+              v.speedKmh > 140 &&
+              Math.random() < this.aiSkillProfile.mistakeRate * 0.08 * dt
             ) {
-              v.aiMistakeTimer = 0.85;
+              v.aiMistakeTimer = 0.7;
             }
           }
 
-          // 3. Levels 1 & 2 pack discipline: stay tense right behind clean driver unless player errs
-          const gapMeters = playerDist - v.trackDistanceMeters; // + = rival behind player
-          let targetPack = 1.0;
-          if (isPackDisciplineLevel && this.playerMistakeTimer <= 0 && this.raceTimeSec > 3.5) {
-            const { packTargetGapMinM, packHoldbackFloor } = DIFFICULTY_CURVE_CONFIG;
-            if (gapMeters < packTargetGapMinM) {
-              // Close to or ahead of clean player: tuck neatly behind inside the close pack
-              targetPack = THREE.MathUtils.clamp(
-                0.955 - (packTargetGapMinM - gapMeters) * 0.0045,
-                packHoldbackFloor,
-                0.96
-              );
-            } else if (gapMeters <= DIFFICULTY_CURVE_CONFIG.packTargetGapMaxM) {
-              targetPack = 0.992;
+          // AI Stuck & Wrong-Way Detector
+          if (this.raceTimeSec > 2.5) {
+            const nearestS = this.track.samples[v.trackHintIndex];
+            const fwdDot = vFwdX * nearestS.tangent.x + vFwdZ * nearestS.tangent.z;
+            if (fwdDot < -0.25) {
+              v.wrongWayTimer += dt;
+            } else {
+              v.wrongWayTimer = Math.max(0, v.wrongWayTimer - dt * 2);
+            }
+
+            if (v.wrongWayTimer >= DIFFICULTY_CURVE_CONFIG.stuckWrongWaySec) {
+              this.respawnAiToClearTrack(v, `Wrong-way heading (${v.wrongWayTimer.toFixed(1)}s)`);
+            } else {
+              v.stuckCheckTimer += dt;
+              if (v.stuckCheckTimer >= DIFFICULTY_CURVE_CONFIG.stuckCheckWindowSec) {
+                const movedDist = v.position.distanceTo(v.stuckOriginPos);
+                v.stuckCheckTimer = 0;
+                v.stuckOriginPos.copy(v.position);
+                if (movedDist < DIFFICULTY_CURVE_CONFIG.stuckMinDistMeters) {
+                  this.respawnAiToClearTrack(v, `Moved only ${movedDist.toFixed(2)}m in ${DIFFICULTY_CURVE_CONFIG.stuckCheckWindowSec}s`);
+                }
+              }
             }
           }
-          v.aiPackMult = THREE.MathUtils.damp(v.aiPackMult, targetPack, 3.2, dt);
 
-          // 4. Light fair rubber-banding (close gaps smoothly; pack levels keep pack cohesive)
-          const {
-            rubberBandBehindStartM,
-            rubberBandBehindSlope,
-            rubberBandMaxBoost,
-            rubberBandAheadSlowM,
-            rubberBandMinMult,
-            packCatchupAssistGapM,
-          } = DIFFICULTY_CURVE_CONFIG;
-
-          const behindStart = isPackDisciplineLevel ? packCatchupAssistGapM : rubberBandBehindStartM;
-          const targetRb =
-            gapMeters > behindStart
-              ? Math.min(rubberBandMaxBoost, 1 + (gapMeters - behindStart) * rubberBandBehindSlope)
-              : gapMeters < -rubberBandAheadSlowM && !isPackDisciplineLevel
-                ? rubberBandMinMult
-                : 1.0;
-          v.aiRubberBandMult = THREE.MathUtils.damp(v.aiRubberBandMult ?? 1, targetRb, 2.2, dt);
+          if (v.recoverFadeTimer > 0) {
+            v.recoverFadeTimer = Math.max(0, v.recoverFadeTimer - dt);
+          }
         }
       }
 
@@ -1061,18 +1098,30 @@ export class RaceEngine {
       let anyRivalJustFinished = false;
       for (const v of this.vehicles) {
         let vInput: VehicleInput;
-        if (v.finished) {
-          // Coast gently past the finish gantry along the track spline while keeping finish stats locked
-          const cruise = computeAiInput(v, this.track, this.level, this.vehicles);
-          vInput = {
-            throttle: Math.min(0.32, cruise.throttle),
-            brake: cruise.brake,
-            steer: cruise.steer,
-            handbrake: false,
-            nitro: false,
-          };
+        if (v.isPlayer && !v.finished) {
+          vInput = input;
         } else {
-          vInput = v.isPlayer ? input : computeAiInput(v, this.track, this.level, this.vehicles);
+          // 25 Hz staggered AI decision update + smooth frame-by-frame interpolation for 60 FPS mobile performance
+          v.aiUpdateAccum += dt;
+          if (v.aiUpdateAccum >= aiStepSec) {
+            v.aiUpdateAccum %= aiStepSec;
+            const rawAi = computeAiInput(v, this.track, this.level, this.vehicles);
+            v.aiCachedInput = v.finished
+              ? {
+                  throttle: Math.min(0.32, rawAi.throttle),
+                  brake: rawAi.brake,
+                  steer: rawAi.steer,
+                  handbrake: false,
+                  nitro: false,
+                }
+              : rawAi;
+          }
+          v.aiAppliedInput.throttle = THREE.MathUtils.damp(v.aiAppliedInput.throttle, v.aiCachedInput.throttle, 16, dt);
+          v.aiAppliedInput.brake = THREE.MathUtils.damp(v.aiAppliedInput.brake, v.aiCachedInput.brake, 16, dt);
+          v.aiAppliedInput.steer = THREE.MathUtils.damp(v.aiAppliedInput.steer, v.aiCachedInput.steer, 18, dt);
+          v.aiAppliedInput.handbrake = v.aiCachedInput.handbrake;
+          v.aiAppliedInput.nitro = v.aiCachedInput.nitro;
+          vInput = v.aiAppliedInput;
         }
 
         stepVehiclePhysics(
@@ -1127,11 +1176,33 @@ export class RaceEngine {
 
       resolveCarToCarCollisions(
         this.vehicles,
-        (intensity, pos) => {
-          if (!this.raceFinished) this.triggerImpact(intensity, pos);
+        (intensity, pos, involvesPlayer) => {
+          this.particles.spawnSparkBurst(pos.x, pos.y + 0.15, pos.z, Math.floor(6 + intensity * 10));
+          if (involvesPlayer && !this.raceFinished) {
+            this.triggerImpact(intensity, pos);
+          }
         },
         this.level.collisionDamageMult ?? 1
       );
+
+      // Track live overtakes & overtaken alerts
+      if (!this.raceFinished && this.raceTimeSec > 1.2) {
+        const curPos = calculatePlayerPosition(this.vehicles);
+        if (curPos !== this.prevPlayerPosition) {
+          const sorted = [...this.vehicles].sort(compareStandings);
+          const playerSortedIdx = sorted.findIndex((x) => x.isPlayer);
+          if (curPos < this.prevPlayerPosition && playerSortedIdx + 1 < sorted.length) {
+            const passedRival = sorted[playerSortedIdx + 1];
+            this.passNotice = { text: `YOU PASSED ${passedRival.driverName.toUpperCase()}`, type: 'overtake' };
+            this.passNoticeTimer = 2.4;
+          } else if (curPos > this.prevPlayerPosition && playerSortedIdx > 0) {
+            const passer = sorted[playerSortedIdx - 1];
+            this.passNotice = { text: `PASSED BY ${passer.driverName.toUpperCase()}`, type: 'overtaken' };
+            this.passNoticeTimer = 2.4;
+          }
+          this.prevPlayerPosition = curPos;
+        }
+      }
 
       // Record initial and periodic keyframes for future personal-best ghost runs
       if (!this.playerBody.finished) {
@@ -1165,6 +1236,7 @@ export class RaceEngine {
     const blinkOn = Math.floor(performance.now() / 360) % 2 === 0;
     const isRain = this.level.weather === 'rain';
     const wiperAngle = isRain ? Math.sin(performance.now() * 0.008) * 0.52 : 0;
+    const isDarkEnv = this.level.timeOfDay === 'night' || this.level.timeOfDay === 'sunset' || this.level.weather === 'fog';
 
     for (const v of this.vehicles) {
       const rig = this.rigs.get(v.id);
@@ -1221,6 +1293,23 @@ export class RaceEngine {
         if (v.damage.engine > 42 && Math.random() < 0.35) {
           rig.hoodSmokeOrigin.getWorldPosition(this._v1);
           this.particles.spawnSmoke(this._v1.x, this._v1.y, this._v1.z, true, 0.55);
+        }
+      } else {
+        // Real headlights, working brake lights, and smooth stuck-recovery opacity fade for AI rivals
+        rig.headlightMat.emissiveIntensity = isDarkEnv ? 2.2 : 0.85;
+        rig.beamConeLeft.visible = isDarkEnv;
+        rig.beamConeRight.visible = isDarkEnv;
+        const aiBraking = v.aiAppliedInput.brake > 0.14 || v.aiAppliedInput.handbrake;
+        rig.taillightMat.emissiveIntensity = aiBraking ? 3.8 : isDarkEnv ? 1.4 : 0.7;
+
+        if (rig.setOpacity) {
+          if (v.recoverFadeTimer > 0) {
+            const p = v.recoverFadeTimer / DIFFICULTY_CURVE_CONFIG.stuckFadeSec;
+            const alpha = Math.max(0.2, Math.abs(1 - 2 * p));
+            rig.setOpacity(alpha);
+          } else {
+            rig.setOpacity(1);
+          }
         }
       }
 
@@ -1356,12 +1445,12 @@ export class RaceEngine {
       this.renderer.render(this.scene, this.camera);
     }
 
-    // Live Rear-View Mirror Scissor Render at top-center (GPU only, High/Ultra/Medium)
+    // Live Rear-View Mirror Scissor Render at top-center (GPU GPU renders across desktop & mobile landscape)
     if (!this.isSoftwareGl && this.resolvedQuality !== 'low' && this.cameraMode !== 'cinematic') {
-      const mw = Math.min(220, Math.floor(w * 0.24));
-      const mh = Math.min(68, Math.floor(h * 0.12));
+      const mw = Math.min(216, Math.max(114, Math.floor(w * 0.24)));
+      const mh = Math.min(64, Math.max(36, Math.floor(h * 0.12)));
       const mx = Math.floor((w - mw) * 0.5);
-      const my = h - mh - 14;
+      const my = h - mh - (h < 500 ? 8 : 14);
 
       this.playerRig.rearMirrorAnchor.getWorldPosition(this.rearMirrorCamera.position);
       const p = this.playerBody;
@@ -1502,8 +1591,8 @@ export class RaceEngine {
         ctx.fill();
       }
 
-      // Car body
-      ctx.fillStyle = v.isPlayer ? this.ownedCarState.customization.paintColor : '#38bdf8';
+      // Car body (render rivals in their true paint colors)
+      ctx.fillStyle = v.isPlayer ? this.ownedCarState.customization.paintColor : v.aiColor;
       ctx.fillRect(-1.05, -2.35, 2.1, 4.7);
       // Windshield
       ctx.fillStyle = '#0f172a';
@@ -1537,6 +1626,90 @@ export class RaceEngine {
         ? Math.round(this.fpsSamples.reduce((a, b) => a + b, 0) / this.fpsSamples.length)
         : 60;
 
+    // Sort all racers using the exact shared comparator for consistent positions, gaps & debug rows
+    const sortedVehicles = [...this.vehicles].sort(compareStandings);
+    const positionById = new Map<string, number>();
+    sortedVehicles.forEach((v, i) => positionById.set(v.id, i + 1));
+
+    const playerSortIdx = sortedVehicles.findIndex((v) => v.isPlayer);
+    const paceRefMs = Math.max(22, this.playerBody.speedMs, this.playerBody.topSpeedKmh / 3.6 * 0.68);
+    const aheadVeh = playerSortIdx > 0 ? sortedVehicles[playerSortIdx - 1] : null;
+    const behindVeh =
+      playerSortIdx >= 0 && playerSortIdx + 1 < sortedVehicles.length
+        ? sortedVehicles[playerSortIdx + 1]
+        : null;
+
+    const gapAhead = aheadVeh
+      ? {
+          name: aheadVeh.driverName,
+          gapMeters: Math.max(0, aheadVeh.trackDistanceMeters - this.playerBody.trackDistanceMeters),
+          gapSec: Number(
+            Math.max(
+              0.05,
+              Math.abs(aheadVeh.trackDistanceMeters - this.playerBody.trackDistanceMeters) / paceRefMs
+            ).toFixed(2)
+          ),
+        }
+      : null;
+
+    const gapBehind = behindVeh
+      ? {
+          name: behindVeh.driverName,
+          gapMeters: Math.max(0, this.playerBody.trackDistanceMeters - behindVeh.trackDistanceMeters),
+          gapSec: Number(
+            Math.max(
+              0.05,
+              Math.abs(this.playerBody.trackDistanceMeters - behindVeh.trackDistanceMeters) / paceRefMs
+            ).toFixed(2)
+          ),
+        }
+      : null;
+
+    // Project 3D floating rival name tags onto screen percentages when inside view
+    const rivalTags: RaceTelemetry['rivalTags'] = [];
+    this.camera.updateMatrixWorld();
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      if (v.isPlayer) continue;
+      const dist = v.position.distanceTo(this.camera.position);
+      if (dist > 165) continue;
+
+      this._projVec.set(v.position.x, v.position.y + 1.88, v.position.z);
+      this._projVec.project(this.camera);
+      if (this._projVec.z >= 1 || this._projVec.z <= -1) continue;
+
+      const xPct = (this._projVec.x * 0.5 + 0.5) * 100;
+      const yPct = (-this._projVec.y * 0.5 + 0.5) * 100;
+      if (xPct < 4 || xPct > 96 || yPct < 8 || yPct > 84) continue;
+
+      rivalTags.push({
+        id: v.id,
+        name: v.driverName,
+        color: v.aiColor,
+        xPct: Number(xPct.toFixed(2)),
+        yPct: Number(yPct.toFixed(2)),
+        distanceM: Math.round(v.position.distanceTo(this.playerBody.position)),
+        position: positionById.get(v.id) ?? 1,
+      });
+    }
+
+    const aiDebugRows = this.settings.showAiDebug
+      ? sortedVehicles
+          .filter((v) => !v.isPlayer)
+          .map((v) => ({
+            id: v.id,
+            position: positionById.get(v.id) ?? 1,
+            name: v.driverName,
+            speedKmh: Math.round(v.speedKmh),
+            maxSpeedKmh: v.topSpeedKmh,
+            style: v.aiStyle,
+            state: v.aiState,
+            gapSec: Number(
+              ((v.trackDistanceMeters - this.playerBody.trackDistanceMeters) / paceRefMs).toFixed(2)
+            ),
+          }))
+      : undefined;
+
     this.onTelemetry({
       speedKmh: Math.round(this.playerBody.speedKmh),
       rpm: Math.round(this.playerBody.rpm),
@@ -1545,7 +1718,7 @@ export class RaceEngine {
       nitro: Math.round(this.playerBody.nitro),
       nitroActive: this.playerBody.nitroActive,
       slipstreaming: this.playerBody.slipstreamAmount > 0.12,
-      slipstreamBoostPct: Math.round(this.playerBody.slipstreamAmount * 9),
+      slipstreamBoostPct: Math.round(this.playerBody.slipstreamAmount * 8),
       position: posRank,
       totalCars: this.vehicles.length,
       lap: this.playerBody.lap,
@@ -1576,6 +1749,11 @@ export class RaceEngine {
           ? this.ghostConfig.bestTimeSec
           : null,
       ghostFinished: this.ghostFinished,
+      gapAhead,
+      gapBehind,
+      passNotice: this.passNotice,
+      rivalTags,
+      aiDebugRows,
       minimapData: {
         trackPoints: this.track.minimapPoints,
         bounds: this.track.minimapBounds,
@@ -1586,7 +1764,7 @@ export class RaceEngine {
         },
         rivals: this.vehicles
           .filter((v) => !v.isPlayer)
-          .map((v) => ({ x: v.position.x, z: v.position.z })),
+          .map((v) => ({ x: v.position.x, z: v.position.z, color: v.aiColor, name: v.driverName })),
         ghost:
           this.ghostRig && this.ghostRig.root.visible
             ? {

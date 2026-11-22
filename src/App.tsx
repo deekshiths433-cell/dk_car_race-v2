@@ -107,6 +107,22 @@ export default function App() {
     };
   }, [screen]);
 
+  // Toggle AI Debug Overlay with F3 key during race
+  useEffect(() => {
+    if (screen !== 'race') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'F3') {
+        e.preventDefault();
+        setSave((prev) => ({
+          ...prev,
+          settings: { ...prev.settings, showAiDebug: !prev.settings.showAiDebug },
+        }));
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [screen]);
+
   // Keep game fullscreen and landscape when launched from home screen as installed PWA
   useEffect(() => {
     if (!isRunningAsInstalledPWA()) return;

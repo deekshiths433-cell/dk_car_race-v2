@@ -45,25 +45,27 @@ export const DIFFICULTY_CURVE_CONFIG = {
   rivalCountLevelsPerStep: 2,
   rivalCountMax: 7,
 
-  // In-race warm-up: rivals start at ~95% pace on Lap 1 and ramp to 100% by final lap
-  warmupMinStart: 0.95,
-  warmupPerLevelGain: 0.004,
-  warmupMaxStart: 0.995,
-
   // Early-level pack discipline (Levels 1 & 2): stay close behind a clean driver unless they make a mistake
   packMaxLevel: 2,
   packTargetGapMinM: 10,
   packTargetGapMaxM: 26,
-  packCatchupAssistGapM: 34,
   packHoldbackFloor: 0.89,
   playerMistakeDurationSec: 2.5,
 
-  // Light fair rubber-banding (never teleports or breaks realistic top speed bounds)
-  rubberBandBehindStartM: 44,
-  rubberBandBehindSlope: 0.0009,
-  rubberBandMaxBoost: 1.07,
+  // Position-keeping damping only (never raises top speed above calculated limit)
+  rubberBandMaxBoost: 1.0,
   rubberBandAheadSlowM: 90,
-  rubberBandMinMult: 0.975,
+  rubberBandMinMult: 0.985,
+
+  // Skilled AI 25 Hz decision brain & stuck recovery thresholds
+  aiUpdateHz: 25,
+  stuckCheckWindowSec: 2.0,
+  stuckMinDistMeters: 2.0,
+  stuckWrongWaySec: 1.2,
+  stuckFadeSec: 0.6,
+
+  // Player & AI brake-to-reverse hold delay (seconds held at stop before engaging reverse)
+  reverseHoldDelaySec: 0.5,
 } as const;
 
 export const DIFFICULTY_LEVEL_BASE: number[] = [...DIFFICULTY_CURVE_CONFIG.levelBase];
@@ -115,20 +117,6 @@ export function getDifficultyTierName(factor: number): DifficultyTierName {
   if (factor < hardMax) return 'Hard';
   if (factor < extremeMax) return 'Extreme';
   return 'Insane';
-}
-
-export function computeRivalWarmupFactor(
-  levelNumber: number,
-  totalProgress: number,
-  totalLaps: number
-): number {
-  const lvl = Math.max(1, Math.floor(levelNumber));
-  const { warmupMinStart, warmupPerLevelGain, warmupMaxStart } = DIFFICULTY_CURVE_CONFIG;
-  const startMult = Math.min(warmupMaxStart, warmupMinStart + (lvl - 1) * warmupPerLevelGain);
-  // Ramp smoothly from Lap 1 start up to 1.00 by the time the racer enters the final lap
-  const rampSpan = Math.max(1, totalLaps - 1);
-  const progressNorm = Math.max(0, Math.min(1, totalProgress / rampSpan));
-  return Number((startMult + (1 - startMult) * progressNorm).toFixed(4));
 }
 
 export function computeAiSkillProfile(
@@ -222,7 +210,9 @@ export interface MatchedPerformanceSummary {
   difficultyFactor: number;
   difficultyName: DifficultyTierName;
   playerBaseTopSpeedKmh: number;
+  playerUpgradedTopSpeedKmh: number;
   playerEffectiveTopSpeedKmh: number;
+  referenceTopSpeedKmh: number;
   playerDamagePenaltyPct: number;
   rivalTargetTopSpeedKmh: number;
   rivalBaseAccelMs2: number;
@@ -234,9 +224,10 @@ export interface MatchedPerformanceSummary {
 }
 
 /**
- * Matches rivals' speed, acceleration, and grip directly to the player's current car
- * scaled by `difficultyFactor(level)` — with only 50% of player upgrade bonuses passed
- * through to rivals so upgrading in the Garage gives a real edge.
+ * Computes constant rival pace once at race start:
+ *   referenceSpeed = stockTopSpeed + 0.5 * (upgradedTopSpeed - stockTopSpeed)
+ *   rivalTopSpeed = referenceSpeed * factor(level)
+ * Applies the same factor and 50% upgrade pass-through to acceleration and grip.
  */
 export function computeMatchedRivalStats(
   playerSpec: CarSpec,
@@ -255,36 +246,33 @@ export function computeMatchedRivalStats(
   const dmgBody = ownedState?.damage.body ?? 0;
   const avgDmgPct = Math.round((dmgEngine + dmgTires + dmgBody) / 3);
 
+  const stockTopSpeed = playerSpec.stats.topSpeedKmh;
   const playerUpgradeSpeedMult = 1 + engLvl * 0.018 + turboLvl * 0.012;
-  const rivalUpgradeSpeedMult =
-    1 + (engLvl * 0.018 + turboLvl * 0.012) * RIVAL_UPGRADE_PASS_THROUGH;
+  const upgradedTopSpeed = stockTopSpeed * playerUpgradeSpeedMult;
+  const referenceSpeed =
+    stockTopSpeed + RIVAL_UPGRADE_PASS_THROUGH * (upgradedTopSpeed - stockTopSpeed);
 
   const playerUpgradeAccelMult = 1 + engLvl * 0.035 + turboLvl * 0.04;
-  const rivalUpgradeAccelMult =
-    1 + (engLvl * 0.035 + turboLvl * 0.04) * RIVAL_UPGRADE_PASS_THROUGH;
+  const referenceAccelScale =
+    1 + RIVAL_UPGRADE_PASS_THROUGH * (playerUpgradeAccelMult - 1);
 
   const playerTireBonus =
     TIRE_STYLES.find((t) => t.id === ownedState?.customization.tireStyle)?.gripBonus ?? 0;
   const playerGripUpgrade = tiresLvl * 0.03 + playerTireBonus;
-  const rivalGripUpgrade = playerGripUpgrade * RIVAL_UPGRADE_PASS_THROUGH;
+  const stockGrip = 0.88 + (playerSpec.stats.handling / 100) * 0.42;
+  const upgradedGrip = stockGrip + playerGripUpgrade;
+  const referenceGrip = stockGrip + RIVAL_UPGRADE_PASS_THROUGH * (upgradedGrip - stockGrip);
 
   const engineDamagePenalty = 1 - (dmgEngine / 100) * 0.28;
-  const playerEffectiveTopSpeedKmh = Math.round(
-    playerSpec.stats.topSpeedKmh * playerUpgradeSpeedMult * engineDamagePenalty
-  );
+  const playerEffectiveTopSpeedKmh = Math.round(upgradedTopSpeed * engineDamagePenalty);
 
-  // Rivals match the player's car (with 50% of upgrades) * difficulty factor across speed, accel, grip
-  const rivalTargetTopSpeedKmh = Math.max(
-    140,
-    Math.round(playerSpec.stats.topSpeedKmh * rivalUpgradeSpeedMult * factor)
-  );
+  // Rival target top speed, acceleration, and grip all use the exact level factor
+  const rivalTargetTopSpeedKmh = Math.max(140, Math.round(referenceSpeed * factor));
 
   const playerZeroTo100Ms2 = (100 / 3.6) / Math.max(1.8, playerSpec.stats.zeroToHundredSec);
   const rivalBaseAccelMs2 = Number(playerZeroTo100Ms2.toFixed(4));
-  const rivalAccelScale = Number((rivalUpgradeAccelMult * factor).toFixed(3));
-
-  const playerBaseHandlingGrip = 0.88 + (playerSpec.stats.handling / 100) * 0.42;
-  const rivalGripScale = Number(((playerBaseHandlingGrip + rivalGripUpgrade) * factor).toFixed(3));
+  const rivalAccelScale = Number((referenceAccelScale * factor).toFixed(3));
+  const rivalGripScale = Number((referenceGrip * factor).toFixed(3));
 
   // Recommended top speed benchmark for advisory warnings on Race Intro
   const recommendedTopSpeedKmh = Math.min(
@@ -312,8 +300,10 @@ export function computeMatchedRivalStats(
   return {
     difficultyFactor: factor,
     difficultyName,
-    playerBaseTopSpeedKmh: playerSpec.stats.topSpeedKmh,
+    playerBaseTopSpeedKmh: stockTopSpeed,
+    playerUpgradedTopSpeedKmh: Math.round(upgradedTopSpeed),
     playerEffectiveTopSpeedKmh,
+    referenceTopSpeedKmh: Math.round(referenceSpeed),
     playerDamagePenaltyPct: Math.round((1 - engineDamagePenalty) * 100),
     rivalTargetTopSpeedKmh,
     rivalBaseAccelMs2,

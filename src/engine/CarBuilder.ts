@@ -44,6 +44,7 @@ export interface BuiltCarRig {
   hoodCameraAnchor: THREE.Object3D;
   rearMirrorAnchor: THREE.Object3D;
   ghostMaterials?: { material: THREE.Material; baseOpacity: number }[];
+  setOpacity?: (alpha: number) => void;
 }
 
 function createPaintMaterial(colorHex: string, finish: PaintFinish): THREE.MeshPhysicalMaterial {
@@ -1043,6 +1044,51 @@ export function buildSupercarModel(
     flameMatR.opacity = 0.55;
   }
 
+  // Ensure rival & player cars are never erroneously hidden by frustum culling or LOD bounds
+  const fadeEntries: {
+    material: THREE.Material;
+    baseTransparent: boolean;
+    baseOpacity: number;
+  }[] = [];
+  const seenFadeMats = new Set<THREE.Material>();
+  root.frustumCulled = false;
+  root.traverse((obj) => {
+    obj.frustumCulled = false;
+    if (
+      !options.isGhost &&
+      obj instanceof THREE.Mesh &&
+      obj !== nitroFlameLeft &&
+      obj !== nitroFlameRight &&
+      obj !== beamConeLeft &&
+      obj !== beamConeRight &&
+      obj !== damageOverlayMesh &&
+      obj !== shadowPlane
+    ) {
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      for (const m of mats) {
+        if (m && !seenFadeMats.has(m)) {
+          seenFadeMats.add(m);
+          fadeEntries.push({
+            material: m,
+            baseTransparent: m.transparent,
+            baseOpacity: m.opacity,
+          });
+        }
+      }
+    }
+  });
+
+  const setOpacity = (alpha: number) => {
+    const a = THREE.MathUtils.clamp(alpha, 0.08, 1);
+    const fading = a < 0.99;
+    for (let i = 0; i < fadeEntries.length; i++) {
+      const entry = fadeEntries[i];
+      entry.material.transparent = fading ? true : entry.baseTransparent;
+      entry.material.opacity = entry.baseOpacity * a;
+      entry.material.needsUpdate = entry.material.transparent !== entry.baseTransparent;
+    }
+  };
+
   return {
     root,
     bodyPaintMat,
@@ -1076,5 +1122,6 @@ export function buildSupercarModel(
     hoodCameraAnchor,
     rearMirrorAnchor,
     ghostMaterials,
+    setOpacity,
   };
 }

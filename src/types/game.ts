@@ -254,6 +254,7 @@ export interface GameSettings {
   vibrationFeedback: boolean;
   mouseSteering: boolean;
   showGhost: boolean;
+  showAiDebug?: boolean;
   mobileLayout: MobileLayoutConfig;
 }
 
@@ -375,11 +376,33 @@ export interface RaceTelemetry {
   ghostDeltaSec: number | null;
   ghostBestTimeSec: number | null;
   ghostFinished: boolean;
+  gapAhead: { name: string; gapSec: number; gapMeters: number } | null;
+  gapBehind: { name: string; gapSec: number; gapMeters: number } | null;
+  passNotice: { text: string; type: 'overtake' | 'overtaken' } | null;
+  rivalTags: {
+    id: string;
+    name: string;
+    color: string;
+    xPct: number;
+    yPct: number;
+    distanceM: number;
+    position: number;
+  }[];
+  aiDebugRows?: {
+    id: string;
+    position: number;
+    name: string;
+    speedKmh: number;
+    maxSpeedKmh: number;
+    style: string;
+    state: string;
+    gapSec: number;
+  }[];
   minimapData: {
     trackPoints: { x: number; z: number }[];
     bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
     player: { x: number; z: number; yaw: number };
-    rivals: { x: number; z: number }[];
+    rivals: { x: number; z: number; color: string; name: string }[];
     ghost: { x: number; z: number } | null;
   };
 }

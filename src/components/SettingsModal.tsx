@@ -371,6 +371,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {settings.mouseSteering ? 'ON' : 'OFF'}
                 </button>
               </div>
+
+              <div className="p-4 rounded-xl bg-[#0f1420] border border-white/10 flex items-center justify-between gap-4">
+                <div>
+                  <div className="text-sm font-semibold text-white">
+                    AI Rival Debug Overlay (F3)
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    Displays live rival speeds, top speed caps, personalities, and racecraft states
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onChange({ showAiDebug: !settings.showAiDebug })}
+                  className={`px-4 py-2 rounded-lg text-xs font-bold cursor-pointer touch-manipulation ${
+                    settings.showAiDebug
+                      ? 'bg-cyan-400 text-slate-950'
+                      : 'bg-slate-800 text-slate-300'
+                  }`}
+                >
+                  {settings.showAiDebug ? 'ON' : 'OFF'}
+                </button>
+              </div>
             </div>
           )}
 

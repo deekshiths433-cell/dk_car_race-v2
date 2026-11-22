@@ -165,12 +165,15 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
       ctx.stroke();
     }
 
-    // Rivals
-    ctx.fillStyle = '#38bdf8';
+    // Rivals in real paint color with crisp outline
     rivals.forEach((r) => {
+      ctx.fillStyle = r.color || '#38bdf8';
+      ctx.strokeStyle = '#090b10';
+      ctx.lineWidth = 1.4;
       ctx.beginPath();
-      ctx.arc(toX(r.x), toY(r.z), 4.2, 0, Math.PI * 2);
+      ctx.arc(toX(r.x), toY(r.z), 4.5, 0, Math.PI * 2);
       ctx.fill();
+      ctx.stroke();
     });
 
     // Player triangle
@@ -579,6 +582,34 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           />
         )}
 
+        {/* Projected 3D Floating Rival Name Tags */}
+        {telemetry.rivalTags && telemetry.rivalTags.length > 0 && (
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            {telemetry.rivalTags.map((tag) => (
+              <div
+                key={tag.id}
+                style={{
+                  left: `${tag.xPct}%`,
+                  top: `${tag.yPct}%`,
+                  transform: 'translate(-50%, -120%)',
+                }}
+                className="absolute px-2 py-0.5 rounded-md bg-[#0b0e16]/85 border border-white/20 shadow flex items-center gap-1.5 whitespace-nowrap"
+              >
+                <span
+                  className="w-2 h-2 rounded-full shrink-0 border border-white/40"
+                  style={{ backgroundColor: tag.color }}
+                />
+                <span className="text-[10px] font-bold text-white leading-none">
+                  P{tag.position} {tag.name}
+                </span>
+                <span className="text-[9px] font-mono-num text-slate-400 leading-none">
+                  {tag.distanceM}m
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
         {/* Non-blocking Portrait Orientation Tip (never hides HUD or 3D race) */}
         {isPortrait && !portraitHintDismissed && (
           <div className="absolute top-[max(3.6rem,calc(env(safe-area-inset-top)+3.4rem))] left-1/2 -translate-x-1/2 z-40 pointer-events-auto flex items-center gap-2 px-3 py-1.5 rounded-xl bg-[#0b0e16]/90 border border-amber-500/40 text-xs text-slate-200 whitespace-nowrap shadow-lg">
@@ -698,18 +729,18 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
             <div />
           )}
 
-          {/* Top-Center Rear-View Mirror Frame (Desktop / Tablet only so small phone screens stay uncluttered) */}
+          {/* Top-Center Rear-View Mirror Frame (Visible on both desktop & mobile landscape) */}
           {telemetry.cameraMode !== 'cinematic' && (
-            <div className="hidden md:flex flex-col items-center">
-              <div className="w-[210px] h-[64px] border-2 border-slate-600/80 rounded-lg shadow-lg relative overflow-hidden">
-                <span className="absolute bottom-1 right-1.5 text-[9px] font-semibold tracking-wider text-slate-300/80 uppercase">
-                  Rear Mirror
+            <div className="hidden sm:flex max-lg:landscape:flex flex-col items-center shrink-0">
+              <div className="w-[114px] h-[36px] sm:w-[164px] sm:h-[50px] md:w-[216px] md:h-[64px] border-2 border-slate-500/80 rounded-lg shadow-lg relative overflow-hidden">
+                <span className="absolute bottom-0.5 right-1 text-[8px] sm:text-[9px] font-semibold tracking-wider text-slate-300/80 uppercase">
+                  Mirror
                 </span>
               </div>
             </div>
           )}
 
-          {/* Top-Right Safe Zone: Minimap + Pause */}
+          {/* Top-Right Safe Zone: Minimap + Pause + Quick Actions */}
           <div className="flex items-start gap-2">
             {hud.minimap && (
               <div
@@ -736,6 +767,16 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                 className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg bg-[#0b0e16]/90 hover:bg-slate-800 border border-white/15 flex items-center justify-center text-white cursor-pointer touch-manipulation"
               >
                 <Pause className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={onResetCar}
+                aria-label="Reset Car to Track"
+                title="Reset Car to Track (R)"
+                className="w-10 h-9 sm:w-11 rounded-lg bg-[#0b0e16]/85 hover:bg-amber-500/25 border border-amber-400/35 flex flex-col items-center justify-center text-amber-300 cursor-pointer touch-manipulation"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span className="text-[7px] font-bold leading-none mt-0.5">RESET</span>
               </button>
               {!isMobile && (
                 <div className="flex flex-col gap-1">
@@ -767,6 +808,48 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           </div>
         </div>
 
+        {/* Live Gaps & Optional AI Debug Overlay (Top-Left below Pos/Lap) */}
+        <div className="mt-1.5 flex flex-col items-start gap-1.5 pointer-events-none">
+          {(telemetry.gapAhead || telemetry.gapBehind) && telemetry.countdown < 0 && (
+            <div className="bg-[#0b0e16]/82 border border-white/10 rounded-lg px-2.5 py-1 flex items-center gap-3 text-[10px] sm:text-xs font-mono-num">
+              {telemetry.gapAhead && (
+                <span className="text-rose-300">
+                  ▲ {telemetry.gapAhead.name}{' '}
+                  <strong className="text-white">-{telemetry.gapAhead.gapSec.toFixed(1)}s</strong>
+                </span>
+              )}
+              {telemetry.gapBehind && (
+                <span className="text-emerald-300">
+                  ▼ {telemetry.gapBehind.name}{' '}
+                  <strong className="text-white">+{telemetry.gapBehind.gapSec.toFixed(1)}s</strong>
+                </span>
+              )}
+            </div>
+          )}
+
+          {settings.showAiDebug && telemetry.aiDebugRows && (
+            <div className="bg-[#090b10]/90 border border-cyan-400/35 rounded-lg p-2 text-[10px] font-mono-num text-slate-200 shadow-lg max-w-[330px]">
+              <div className="flex items-center justify-between text-[9px] uppercase tracking-wider text-cyan-300 font-bold mb-1">
+                <span>AI Debug Overlay (F3)</span>
+                <span>{telemetry.fps} FPS</span>
+              </div>
+              <div className="space-y-0.5">
+                {telemetry.aiDebugRows.map((row) => (
+                  <div key={row.id} className="flex items-center justify-between gap-2 whitespace-nowrap">
+                    <span className="text-amber-300 font-bold">P{row.position}</span>
+                    <span className="truncate max-w-[82px] text-white">{row.name}</span>
+                    <span className="text-slate-300">
+                      {row.speedKmh}/{row.maxSpeedKmh}
+                    </span>
+                    <span className="text-cyan-300 uppercase">{row.style.slice(0, 3)}</span>
+                    <span className="text-emerald-300">{row.state}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Center Countdown / Wrong Way / Checkpoint Banner */}
         <div className="absolute inset-x-0 top-[22%] flex flex-col items-center justify-center pointer-events-none gap-1.5 px-4">
           {telemetry.countdown >= 0 && (
@@ -779,6 +862,17 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           {telemetry.wrongWay && (
             <div className="bg-red-600/90 text-white px-4 py-1.5 rounded-lg font-display font-bold text-sm sm:text-lg tracking-wider text-center">
               WRONG WAY · TURN AROUND {!isMobile && '(R TO RESET)'}
+            </div>
+          )}
+          {telemetry.passNotice && telemetry.countdown < 0 && (
+            <div
+              className={`px-4 py-1 rounded-lg font-display font-bold text-xs sm:text-sm tracking-wider border ${
+                telemetry.passNotice.type === 'overtake'
+                  ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200'
+                  : 'bg-rose-500/25 border-rose-400 text-rose-200'
+              }`}
+            >
+              {telemetry.passNotice.text}
             </div>
           )}
           {telemetry.checkpointNotice && (
