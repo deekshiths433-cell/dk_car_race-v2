@@ -5,7 +5,14 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { getCarDisplayName } from '../data/brandConfig';
 import { CAR_ORDER, CAR_SPECS } from '../data/cars';
-import { AI_RIVAL_VARIATION_RANGE, computeMatchedRivalStats } from '../data/difficulty';
+import {
+  AI_RIVAL_VARIATION_RANGE,
+  AiSkillProfile,
+  computeAiSkillProfile,
+  computeMatchedRivalStats,
+  computeRivalWarmupFactor,
+  DIFFICULTY_CURVE_CONFIG,
+} from '../data/difficulty';
 import { BIOME_META } from '../data/levels';
 import {
   CameraMode,
@@ -118,6 +125,8 @@ export class RaceEngine {
   private wasNitroActive = false;
   private checkpointNotice: string | null = null;
   private checkpointNoticeTimer = 0;
+  private playerMistakeTimer = 0;
+  private aiSkillProfile!: AiSkillProfile;
 
   private keyState = new Set<string>();
   private touchInput: ExternalControlInput = {
@@ -367,6 +376,10 @@ export class RaceEngine {
       this.level.levelNumber,
       this.settings.difficultySetting
     );
+    this.aiSkillProfile = computeAiSkillProfile(
+      this.level.levelNumber,
+      this.settings.difficultySetting
+    );
 
     // Seeded pseudo-random generator so each race draws fresh rival names, colors, models, and styles
     let rng = (this.level.seed * 1664525 + 1013904223) >>> 0;
@@ -451,9 +464,9 @@ export class RaceEngine {
 
       const variation = 1 + (nextRand() * 2 - 1) * AI_RIVAL_VARIATION_RANGE;
       const aiStyle =
-        this.level.levelNumber >= 4
+        this.level.levelNumber >= 3
           ? styles[slot % styles.length]
-          : nextRand() > 0.45
+          : nextRand() > 0.4
             ? 'clean'
             : 'aggressive';
 
@@ -471,9 +484,11 @@ export class RaceEngine {
           ? undefined
           : {
               matchedMaxSpeedMs: matched.rivalTargetTopSpeedKmh / 3.6,
+              matchedBaseAccelMs2: matched.rivalBaseAccelMs2,
               matchedAccelMult: matched.rivalAccelScale,
               matchedGripMult: matched.rivalGripScale,
               aiStyle,
+              aiSkill: this.aiSkillProfile,
             }
       );
 
@@ -917,6 +932,25 @@ export class RaceEngine {
       }
 
       if (!this.raceFinished) {
+        this.playerMistakeTimer = Math.max(0, this.playerMistakeTimer - dt);
+
+        // Detect spin-outs, wrong-way driving, or heavy post-launch slowdowns as player mistakes
+        const pNearest = this.track.samples[this.playerBody.trackHintIndex];
+        const pFwdDot =
+          Math.sin(this.playerBody.yaw) * pNearest.tangent.x +
+          Math.cos(this.playerBody.yaw) * pNearest.tangent.z;
+        const slowCrawlThreshold = Math.max(55, this.playerBody.spec.stats.topSpeedKmh * 0.42);
+        if (
+          this.playerBody.slipRatio > 0.68 ||
+          (pFwdDot < -0.25 && this.playerBody.speedKmh > 12) ||
+          (this.raceTimeSec > 4.8 && this.playerBody.speedKmh < slowCrawlThreshold)
+        ) {
+          this.playerMistakeTimer = Math.max(
+            this.playerMistakeTimer,
+            DIFFICULTY_CURVE_CONFIG.playerMistakeDurationSec * 0.75
+          );
+        }
+
         // Track nitro activations
         if (this.playerBody.nitroActive && !this.wasNitroActive) {
           this.nitroUses++;
@@ -929,8 +963,12 @@ export class RaceEngine {
         }
       }
 
-      // Compute Slipstream aero draft & subtle fair rubber-banding per vehicle
+      // Compute Slipstream aero draft, Lv1-2 pack discipline, warm-up curve & light fair rubber-banding
       const playerDist = this.playerBody.trackDistanceMeters;
+      const isPackDisciplineLevel =
+        this.level.levelNumber <= DIFFICULTY_CURVE_CONFIG.packMaxLevel &&
+        this.settings.difficultySetting !== 'hard';
+
       for (let i = 0; i < this.vehicles.length; i++) {
         const v = this.vehicles[i];
         const vFwdX = Math.sin(v.yaw);
@@ -958,14 +996,64 @@ export class RaceEngine {
         v.slipstreamAmount = THREE.MathUtils.damp(v.slipstreamAmount, maxDraft, 7, dt);
 
         if (!v.isPlayer && !v.finished) {
-          const gapMeters = playerDist - v.trackDistanceMeters;
+          // 1. In-race warm-up (~95% on Lap 1 -> 100% by final lap)
+          v.aiWarmupMult = computeRivalWarmupFactor(
+            this.level.levelNumber,
+            Math.max(0, v.totalProgress),
+            this.level.laps
+          );
+
+          // 2. Rookie-to-Pro AI mistake simulation (gradually disappears at higher levels)
+          if (v.aiMistakeTimer > 0) {
+            v.aiMistakeTimer = Math.max(0, v.aiMistakeTimer - dt);
+            v.aiMistakePenalty = 0.92;
+          } else {
+            v.aiMistakePenalty = THREE.MathUtils.damp(v.aiMistakePenalty, 1.0, 4, dt);
+            if (
+              this.raceTimeSec > 6 &&
+              v.speedKmh > 130 &&
+              Math.random() < this.aiSkillProfile.mistakeRate * 0.12 * dt
+            ) {
+              v.aiMistakeTimer = 0.85;
+            }
+          }
+
+          // 3. Levels 1 & 2 pack discipline: stay tense right behind clean driver unless player errs
+          const gapMeters = playerDist - v.trackDistanceMeters; // + = rival behind player
+          let targetPack = 1.0;
+          if (isPackDisciplineLevel && this.playerMistakeTimer <= 0 && this.raceTimeSec > 3.5) {
+            const { packTargetGapMinM, packHoldbackFloor } = DIFFICULTY_CURVE_CONFIG;
+            if (gapMeters < packTargetGapMinM) {
+              // Close to or ahead of clean player: tuck neatly behind inside the close pack
+              targetPack = THREE.MathUtils.clamp(
+                0.955 - (packTargetGapMinM - gapMeters) * 0.0045,
+                packHoldbackFloor,
+                0.96
+              );
+            } else if (gapMeters <= DIFFICULTY_CURVE_CONFIG.packTargetGapMaxM) {
+              targetPack = 0.992;
+            }
+          }
+          v.aiPackMult = THREE.MathUtils.damp(v.aiPackMult, targetPack, 3.2, dt);
+
+          // 4. Light fair rubber-banding (close gaps smoothly; pack levels keep pack cohesive)
+          const {
+            rubberBandBehindStartM,
+            rubberBandBehindSlope,
+            rubberBandMaxBoost,
+            rubberBandAheadSlowM,
+            rubberBandMinMult,
+            packCatchupAssistGapM,
+          } = DIFFICULTY_CURVE_CONFIG;
+
+          const behindStart = isPackDisciplineLevel ? packCatchupAssistGapM : rubberBandBehindStartM;
           const targetRb =
-            gapMeters > 55
-              ? Math.min(1.055, 1 + (gapMeters - 55) * 0.0008)
-              : gapMeters < -95
-                ? 0.985
+            gapMeters > behindStart
+              ? Math.min(rubberBandMaxBoost, 1 + (gapMeters - behindStart) * rubberBandBehindSlope)
+              : gapMeters < -rubberBandAheadSlowM && !isPackDisciplineLevel
+                ? rubberBandMinMult
                 : 1.0;
-          v.aiRubberBandMult = THREE.MathUtils.damp(v.aiRubberBandMult ?? 1, targetRb, 2.5, dt);
+          v.aiRubberBandMult = THREE.MathUtils.damp(v.aiRubberBandMult ?? 1, targetRb, 2.2, dt);
         }
       }
 
@@ -1187,6 +1275,12 @@ export class RaceEngine {
     this.sound.playCollision(intensity);
     this.particles.spawnSparkBurst(pos.x, pos.y + 0.5, pos.z, Math.floor(10 + intensity * 14));
     this.cameraShake = Math.min(0.65, this.cameraShake + intensity * 0.45);
+    if (intensity > 0.14) {
+      this.playerMistakeTimer = Math.max(
+        this.playerMistakeTimer,
+        DIFFICULTY_CURVE_CONFIG.playerMistakeDurationSec
+      );
+    }
     if (intensity > 0.55) {
       this.hitstopTimer = 0.035;
     }

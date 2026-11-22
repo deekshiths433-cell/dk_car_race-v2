@@ -312,8 +312,13 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
           <div className="sm:col-span-5 max-lg:landscape:col-span-6 flex flex-col justify-between gap-2 bg-slate-900/90 border border-white/10 rounded-xl p-3">
             {/* Player Speed vs Rivals Top Speed Matchup */}
             <div className="bg-slate-950/80 border border-white/10 rounded-lg p-2.5 space-y-1.5">
-              <div className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider truncate">
-                {getCarDisplayName(playerSpec)} vs Grid
+              <div className="flex items-center justify-between gap-2 text-[10px] uppercase font-semibold tracking-wider">
+                <span className="text-slate-400 truncate">
+                  {getCarDisplayName(playerSpec)} vs Grid
+                </span>
+                <span className={`${diffColor} shrink-0 font-bold`}>
+                  {matched.difficultyName} · {Math.round(matched.difficultyFactor * 100)}%
+                </span>
               </div>
               <div className="flex items-center justify-between text-xs font-mono-num">
                 <div>
@@ -329,6 +334,11 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
                     {matched.rivalTargetTopSpeedKmh} km/h
                   </div>
                 </div>
+              </div>
+              <div className="text-[10px] text-slate-400 leading-tight border-t border-white/5 pt-1">
+                {level.levelNumber <= 2
+                  ? 'Pack AI follows close behind clean driving · 50% upgrade pass-through'
+                  : 'Warm-up pace ramps to 100% by final lap · 50% upgrade pass-through'}
               </div>
             </div>
 

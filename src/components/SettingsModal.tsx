@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { RotateCcw, Sliders, Volume2, X } from 'lucide-react';
+import { DIFFICULTY_PRESET_OFFSET } from '../data/difficulty';
 import {
   ControlMode,
   DifficultySetting,
@@ -129,9 +130,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="grid grid-cols-3 gap-2">
                   {(
                     [
-                      ['easy', 'Easy', '-6% Rival Pace'],
-                      ['normal', 'Normal', 'Matched Progression'],
-                      ['hard', 'Hard', '+5% Pace · Blocking · CP Timer'],
+                      ['easy', 'Easy', `${Math.round(DIFFICULTY_PRESET_OFFSET.easy * 100)}% Rival Pace`],
+                      ['normal', 'Normal', 'Lv1 98% -> 120% Cap'],
+                      ['hard', 'Hard', `+${Math.round(DIFFICULTY_PRESET_OFFSET.hard * 100)}% Pace · Blocking · CP Timer`],
                     ] as [DifficultySetting, string, string][]
                   ).map(([val, title, sub]) => (
                     <button
