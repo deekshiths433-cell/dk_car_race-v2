@@ -3,6 +3,7 @@ import { RotateCcw, Sliders, Volume2, X } from 'lucide-react';
 import {
   ControlMode,
   GameSettings,
+  HudVisibilityConfig,
   MobileLayoutConfig,
   QualityPreset,
   SteeringAssist,
@@ -88,7 +89,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </button>
       </div>
 
-      <div className="flex gap-2 px-4 md:px-6 py-2.5 border-b border-white/10 bg-[#0d111a]">
+      <div className="flex flex-wrap gap-2 px-4 md:px-6 py-2.5 border-b border-white/10 bg-[#0d111a]">
         {(
           [
             ['general', 'Graphics & Display'],
@@ -97,9 +98,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           ] as const
         ).map(([id, label]) => (
           <button
+            type="button"
             key={id}
             onClick={() => setTab(id)}
-            className={`px-4 py-2 min-h-[40px] rounded-lg text-xs font-semibold cursor-pointer ${
+            className={`px-3.5 sm:px-4 py-2 min-h-[40px] rounded-lg text-xs font-semibold cursor-pointer touch-manipulation ${
               tab === id
                 ? 'bg-amber-500 text-slate-950'
                 : 'bg-slate-900 text-slate-300 hover:text-white'
@@ -146,9 +148,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="flex gap-1.5 bg-slate-900 p-1 rounded-lg">
                   {(['kmh', 'mph'] as const).map((unit) => (
                     <button
+                      type="button"
                       key={unit}
                       onClick={() => onChange({ speedUnit: unit })}
-                      className={`px-4 py-2 rounded-md text-xs font-bold uppercase cursor-pointer ${
+                      className={`px-4 py-2 rounded-md text-xs font-bold uppercase cursor-pointer touch-manipulation ${
                         settings.speedUnit === unit
                           ? 'bg-amber-500 text-slate-950'
                           : 'text-slate-300'
@@ -157,6 +160,107 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {unit === 'kmh' ? 'KM/H' : 'MPH'}
                     </button>
                   ))}
+                </div>
+              </div>
+
+              {/* HUD Size Slider (Small / Medium / Large) & Element Toggles */}
+              <div className="p-4 rounded-xl bg-[#0f1420] border border-white/10 space-y-4">
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <h3 className="text-sm font-semibold text-white">In-Race HUD Size</h3>
+                    <span className="font-mono-num text-xs font-bold text-amber-400">
+                      {settings.hudScale <= 0.88
+                        ? 'Small'
+                        : settings.hudScale >= 1.12
+                          ? 'Large'
+                          : 'Medium'}{' '}
+                      ({Math.round(settings.hudScale * 100)}%)
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mb-3">
+                    Scale speedometer, minimap, and race telemetry for your phone or monitor
+                  </p>
+                  <input
+                    type="range"
+                    aria-label="HUD Size"
+                    min={0.8}
+                    max={1.2}
+                    step={0.05}
+                    value={settings.hudScale}
+                    onChange={(e) => onChange({ hudScale: parseFloat(e.target.value) })}
+                    className="w-full accent-amber-500 cursor-pointer"
+                  />
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    {(
+                      [
+                        [0.8, 'Small'],
+                        [1.0, 'Medium'],
+                        [1.2, 'Large'],
+                      ] as const
+                    ).map(([presetVal, label]) => {
+                      const active = Math.abs(settings.hudScale - presetVal) < 0.04;
+                      return (
+                        <button
+                          type="button"
+                          key={label}
+                          onClick={() => onChange({ hudScale: presetVal })}
+                          className={`py-2 min-h-[38px] rounded-lg text-xs font-semibold cursor-pointer touch-manipulation ${
+                            active
+                              ? 'bg-amber-500 text-slate-950'
+                              : 'bg-slate-900 text-slate-300 hover:text-white'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-white/10 space-y-2.5">
+                  <div className="text-sm font-semibold text-white">
+                    Show / Hide HUD Elements
+                  </div>
+                  {(
+                    [
+                      ['speedometer', 'Speedometer, Gear & RPM', 'Digital speed readout, gear indicator, and RPM bar'],
+                      ['nitro', 'Nitro Bar', 'Boost reserve gauge below the speedometer'],
+                      ['position', 'Race Position', 'Current rank out of total racers'],
+                      ['lapTime', 'Lap & Timer', 'Current lap counter and elapsed race clock'],
+                      ['minimap', 'Track Minimap', 'Live overhead course and rival positions'],
+                    ] as [keyof HudVisibilityConfig, string, string][]
+                  ).map(([key, title, desc]) => {
+                    const visible = settings.hudElements[key];
+                    return (
+                      <div
+                        key={key}
+                        className="flex items-center justify-between gap-3 py-1.5"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-slate-100">{title}</div>
+                          <div className="text-[11px] text-slate-400">{desc}</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onChange({
+                              hudElements: {
+                                ...settings.hudElements,
+                                [key]: !visible,
+                              },
+                            })
+                          }
+                          className={`px-3.5 py-2 min-h-[38px] min-w-[78px] rounded-lg text-xs font-bold shrink-0 cursor-pointer touch-manipulation ${
+                            visible
+                              ? 'bg-emerald-500 text-slate-950'
+                              : 'bg-slate-800 text-slate-300'
+                          }`}
+                        >
+                          {visible ? 'SHOWN' : 'HIDDEN'}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

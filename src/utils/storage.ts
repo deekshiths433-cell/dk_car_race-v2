@@ -29,16 +29,16 @@ export function getDefaultMobileLayout(leftHanded = false): MobileLayoutConfig {
       buttonScale: 1.0,
       buttonOpacity: 0.85,
       positions: {
-        steerLeft: { xPct: 78, yPct: 76 },
-        steerRight: { xPct: 91, yPct: 76 },
-        wheel: { xPct: 84, yPct: 74 },
-        accel: { xPct: 11, yPct: 76 },
-        brake: { xPct: 24, yPct: 80 },
-        nitro: { xPct: 11, yPct: 54 },
-        handbrake: { xPct: 24, yPct: 58 },
-        horn: { xPct: 88, yPct: 38 },
-        lights: { xPct: 77, yPct: 38 },
-        camera: { xPct: 88, yPct: 22 },
+        steerLeft: { xPct: 78, yPct: 79 },
+        steerRight: { xPct: 91, yPct: 79 },
+        wheel: { xPct: 84, yPct: 76 },
+        accel: { xPct: 10, yPct: 76 },
+        brake: { xPct: 23, yPct: 80 },
+        nitro: { xPct: 10, yPct: 52 },
+        handbrake: { xPct: 23, yPct: 57 },
+        horn: { xPct: 92, yPct: 51 },
+        lights: { xPct: 81, yPct: 33 },
+        camera: { xPct: 92, yPct: 33 },
       },
     };
   }
@@ -47,16 +47,16 @@ export function getDefaultMobileLayout(leftHanded = false): MobileLayoutConfig {
     buttonScale: 1.0,
     buttonOpacity: 0.85,
     positions: {
-      steerLeft: { xPct: 9, yPct: 76 },
-      steerRight: { xPct: 22, yPct: 76 },
-      wheel: { xPct: 16, yPct: 74 },
-      accel: { xPct: 89, yPct: 76 },
-      brake: { xPct: 76, yPct: 80 },
-      nitro: { xPct: 89, yPct: 54 },
-      handbrake: { xPct: 76, yPct: 58 },
-      horn: { xPct: 12, yPct: 38 },
-      lights: { xPct: 23, yPct: 38 },
-      camera: { xPct: 12, yPct: 22 },
+      steerLeft: { xPct: 9, yPct: 79 },
+      steerRight: { xPct: 22, yPct: 79 },
+      wheel: { xPct: 16, yPct: 76 },
+      accel: { xPct: 90, yPct: 76 },
+      brake: { xPct: 77, yPct: 80 },
+      nitro: { xPct: 90, yPct: 52 },
+      handbrake: { xPct: 77, yPct: 57 },
+      horn: { xPct: 8, yPct: 51 },
+      lights: { xPct: 19, yPct: 33 },
+      camera: { xPct: 8, yPct: 33 },
     },
   };
 }
@@ -65,6 +65,14 @@ export function getDefaultSettings(): GameSettings {
   return {
     quality: 'auto',
     speedUnit: 'kmh',
+    hudScale: 1.0,
+    hudElements: {
+      speedometer: true,
+      nitro: true,
+      lapTime: true,
+      position: true,
+      minimap: true,
+    },
     engineVolume: 0.75,
     effectsVolume: 0.8,
     musicVolume: 0.35,
@@ -302,16 +310,29 @@ export function loadSaveState(): SaveState {
       }
     }
 
+    const rawPositions = parsed.settings?.mobileLayout?.positions;
+    const isLegacyDefaultPos =
+      rawPositions &&
+      rawPositions.camera?.yPct === 22 &&
+      rawPositions.lights?.yPct === 38 &&
+      rawPositions.horn?.yPct === 38;
+
     const mergedSettings: GameSettings = {
       ...base.settings,
       ...(parsed.settings || {}),
+      hudElements: {
+        ...base.settings.hudElements,
+        ...(parsed.settings?.hudElements || {}),
+      },
       mobileLayout: {
         ...base.settings.mobileLayout,
         ...(parsed.settings?.mobileLayout || {}),
-        positions: {
-          ...base.settings.mobileLayout.positions,
-          ...(parsed.settings?.mobileLayout?.positions || {}),
-        },
+        positions: isLegacyDefaultPos
+          ? getDefaultMobileLayout(Boolean(parsed.settings?.mobileLayout?.leftHanded)).positions
+          : {
+              ...base.settings.mobileLayout.positions,
+              ...(rawPositions || {}),
+            },
       },
     };
 

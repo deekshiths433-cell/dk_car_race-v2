@@ -148,9 +148,19 @@ export interface MobileLayoutConfig {
   };
 }
 
+export interface HudVisibilityConfig {
+  speedometer: boolean;
+  nitro: boolean;
+  lapTime: boolean;
+  position: boolean;
+  minimap: boolean;
+}
+
 export interface GameSettings {
   quality: QualityPreset;
   speedUnit: SpeedUnit;
+  hudScale: number; // 0.8 (small) .. 1.0 (medium) .. 1.2 (large)
+  hudElements: HudVisibilityConfig;
   engineVolume: number; // 0..1
   effectsVolume: number; // 0..1
   musicVolume: number; // 0..1

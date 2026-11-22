@@ -194,7 +194,8 @@ export const ShowroomCanvas: React.FC<ShowroomCanvasProps> = ({
         orbitYawRef.current += dt * 0.28;
       }
 
-      const radius = 5.9;
+      const aspect = camera.aspect || 1;
+      const radius = aspect > 2.8 ? 4.9 : 5.9;
       const yaw = orbitYawRef.current;
       const pitch = orbitPitchRef.current;
       const targetX = shiftXRef.current;
@@ -214,19 +215,25 @@ export const ShowroomCanvas: React.FC<ShowroomCanvasProps> = ({
 
     const handleResize = () => {
       if (disposed || !container) return;
-      const w = container.clientWidth;
+      const w = Math.max(1, container.clientWidth);
       const h = Math.max(1, container.clientHeight);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
     };
     window.addEventListener('resize', handleResize);
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(() => handleResize())
+        : null;
+    resizeObserver?.observe(container);
 
     return () => {
       disposed = true;
       cancelAnimationFrame(frameId);
       window.clearTimeout(frameId);
       window.removeEventListener('resize', handleResize);
+      resizeObserver?.disconnect();
       renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
       renderer.domElement.removeEventListener('webglcontextrestored', onContextRestored);
       renderer.dispose();
@@ -287,8 +294,8 @@ export const ShowroomCanvas: React.FC<ShowroomCanvasProps> = ({
       }
 
       const cx = w * (shiftXRef.current < 0 ? 0.64 : 0.5);
-      const cy = h * 0.58;
-      const scale = Math.min(w, h) * 0.0022;
+      const cy = h * 0.56;
+      const scale = Math.min(w * 0.52, h * 1.15) * 0.0023;
 
       // Showroom studio backdrop
       const bgGrad = ctx.createRadialGradient(cx, cy - 40, 20, cx, cy, Math.max(w, h) * 0.7);
@@ -415,7 +422,7 @@ export const ShowroomCanvas: React.FC<ShowroomCanvasProps> = ({
 
   return (
     <div
-      className={`w-full h-full relative cursor-grab active:cursor-grabbing ${className}`}
+      className={`w-full h-full relative cursor-grab active:cursor-grabbing touch-pan-y ${className}`}
       onPointerDown={(e) => {
         draggingRef.current = true;
         lastPtrRef.current = { x: e.clientX, y: e.clientY };

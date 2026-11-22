@@ -279,7 +279,7 @@ export default function App() {
       {/* ACTIVE RACE VIEWPORT */}
       {screen === 'race' && (
         <>
-          <div ref={raceMountRef} className="w-full h-full" />
+          <div ref={raceMountRef} className="relative z-0 w-full h-full" />
           {!raceResult && (
             <RaceHUD
               telemetry={telemetry}
