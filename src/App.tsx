@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { SoundEngine } from './audio/SoundEngine';
 import { AboutModal } from './components/AboutModal';
 import { CarShopModal } from './components/CarShopModal';
+import { CompareCarsModal } from './components/CompareCarsModal';
 import { DailyRewardsModal } from './components/DailyRewardsModal';
 import { GarageModal } from './components/GarageModal';
 import { ActiveModal, HomePage } from './components/HomePage';
 import { HowToPlayModal } from './components/HowToPlayModal';
 import { LevelSelectModal } from './components/LevelSelectModal';
+import { LoadingRaceOverlay } from './components/LoadingRaceOverlay';
 import { PauseModal } from './components/PauseModal';
 import { OfflineIndicator } from './components/PWAInstallButton';
 import { RaceHUD } from './components/RaceHUD';
@@ -15,7 +17,8 @@ import { RepairShopModal } from './components/RepairShopModal';
 import { ResultsModal } from './components/ResultsModal';
 import { RewardedAdModal } from './components/RewardedAdModal';
 import { SettingsModal } from './components/SettingsModal';
-import { CAR_SPECS } from './data/cars';
+import { getCarDisplayName } from './data/brandConfig';
+import { CAR_SPECS, isCarUnlockRuleMet } from './data/cars';
 import { generateRaceLevelConfig } from './data/levels';
 import { ExternalControlInput, RaceEngine } from './engine/RaceEngine';
 import { ShowroomCanvas } from './engine/ShowroomCanvas';
@@ -55,6 +58,8 @@ export default function App() {
   const [paused, setPaused] = useState(false);
   const [raceResult, setRaceResult] = useState<RaceResult | null>(null);
   const [telemetry, setTelemetry] = useState<RaceTelemetry | null>(null);
+  const [loadingLevel, setLoadingLevel] = useState<LevelConfig | null>(null);
+  const [loadingPct, setLoadingPct] = useState(0);
 
   const [pendingAd, setPendingAd] = useState<{
     req: RewardedAdRequest;
@@ -64,6 +69,7 @@ export default function App() {
   const raceMountRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<RaceEngine | null>(null);
   const soundRef = useRef<SoundEngine | null>(null);
+  const loadingTimerRef = useRef<number | null>(null);
   const saveRef = useRef<SaveState>(save);
   saveRef.current = save;
 
@@ -148,6 +154,14 @@ export default function App() {
       ?.orientation ?? null;
   }
 
+  useEffect(() => {
+    return () => {
+      if (loadingTimerRef.current !== null) {
+        window.clearInterval(loadingTimerRef.current);
+      }
+    };
+  }, []);
+
   const startRace = (
     levelNumber = saveRef.current.currentLevel,
     favoriteMap?: FavoriteMapSeed
@@ -163,7 +177,30 @@ export default function App() {
       lastTimeOfDay: prevLevel?.timeOfDay ?? currentSave.lastRaceTimeOfDay,
       lastWeather: prevLevel?.weather ?? currentSave.lastRaceWeather,
       favorite: favoriteMap,
+      difficultySetting: currentSave.settings.difficultySetting ?? 'normal',
     });
+
+    if (loadingTimerRef.current !== null) {
+      window.clearInterval(loadingTimerRef.current);
+      loadingTimerRef.current = null;
+    }
+
+    setLoadingLevel(nextLevel);
+    setLoadingPct(22);
+    let pct = 22;
+    loadingTimerRef.current = window.setInterval(() => {
+      pct += 20;
+      if (pct >= 100) {
+        setLoadingPct(100);
+        if (loadingTimerRef.current !== null) {
+          window.clearInterval(loadingTimerRef.current);
+          loadingTimerRef.current = null;
+        }
+        window.setTimeout(() => setLoadingLevel(null), 110);
+      } else {
+        setLoadingPct(pct);
+      }
+    }, 125);
 
     setActiveRaceLevel(nextLevel);
     setShowRaceIntro(true);
@@ -235,6 +272,7 @@ export default function App() {
         lastBiome: currentSave.lastRaceBiome,
         lastTimeOfDay: currentSave.lastRaceTimeOfDay,
         lastWeather: currentSave.lastRaceWeather,
+        difficultySetting: currentSave.settings.difficultySetting ?? 'normal',
       });
     const ownedCarState = currentSave.cars[currentSave.selectedCarId];
     const ghostConfig =
@@ -309,11 +347,12 @@ export default function App() {
           });
 
           const spec = CAR_SPECS[res.carId];
+          const carDisplayName = getCarDisplayName(spec);
           const dateISO = new Date().toISOString().slice(0, 10);
           const newLbEntry = {
             id: `run_${Date.now()}`,
             driverName: 'You',
-            carName: `${spec.brand} ${spec.name}`,
+            carName: carDisplayName,
             carId: res.carId,
             levelNumber: res.level.levelNumber,
             biome: res.level.biome,
@@ -330,7 +369,7 @@ export default function App() {
             updatedGhosts[res.level.levelNumber] = {
               levelNumber: res.level.levelNumber,
               carId: res.carId,
-              carName: `${spec.brand} ${spec.name}`,
+              carName: carDisplayName,
               bestTimeSec: res.finishTimeSec,
               samples: res.ghostSamples,
               dateISO,
@@ -446,6 +485,9 @@ export default function App() {
           {showRaceIntro && activeRaceLevel && (
             <RaceIntroModal
               level={activeRaceLevel}
+              playerCarId={save.selectedCarId}
+              ownedCarState={selectedCarState}
+              difficultySetting={save.settings.difficultySetting ?? 'normal'}
               isFavorite={Boolean(
                 save.favoriteMaps?.some((m) => m.seed === activeRaceLevel.seed)
               )}
@@ -456,6 +498,16 @@ export default function App() {
               }}
               onRerollMap={() => startRace(activeRaceLevel.levelNumber)}
               onToggleFavorite={() => toggleFavoriteMap(activeRaceLevel)}
+              onOpenGarage={() => {
+                setShowRaceIntro(false);
+                setScreen('home');
+                setActiveModal('garage');
+              }}
+              onOpenShop={() => {
+                setShowRaceIntro(false);
+                setScreen('home');
+                setActiveModal('shop');
+              }}
               onCancel={() => {
                 setShowRaceIntro(false);
                 setScreen('home');
@@ -515,6 +567,11 @@ export default function App() {
       {activeModal === 'garage' && (
         <GarageModal
           save={save}
+          onSelectCar={(carId) => {
+            updateSave((prev) =>
+              prev.cars[carId]?.owned ? { ...prev, selectedCarId: carId } : prev
+            );
+          }}
           onUpdateCustomization={(carId, patch, cost = 0, unlockKey) => {
             updateSave((prev) => {
               if (prev.points < cost) return prev;
@@ -622,15 +679,19 @@ export default function App() {
               console.error('[DK Car Race][CarShop] Purchase error: Car already owned.', { carId });
               return { ok: false, error: 'You already own this car.' };
             }
-            if (spec.unlockLevelReq && current.highestUnlockedLevel < spec.unlockLevelReq) {
-              console.error('[DK Car Race][CarShop] Purchase error: Level locked.', {
+            const unlockCheck = isCarUnlockRuleMet(spec, current);
+            if (!unlockCheck.unlocked) {
+              console.error('[DK Car Race][CarShop] Purchase error: Unlock condition not met.', {
                 carId,
-                requiredLevel: spec.unlockLevelReq,
+                unlockRule: spec.unlockRule,
                 highestUnlockedLevel: current.highestUnlockedLevel,
+                totalWins: current.totalWins,
               });
               return {
                 ok: false,
-                error: `Reach Level ${spec.unlockLevelReq} to unlock ${spec.name}.`,
+                error:
+                  unlockCheck.reason ??
+                  `Unlock conditions not yet met for ${getCarDisplayName(spec)}.`,
               };
             }
             if (current.points < spec.price) {
@@ -779,6 +840,23 @@ export default function App() {
           onChange={handleUpdateSettings}
           onClose={() => setActiveModal('none')}
         />
+      )}
+
+      {activeModal === 'compare' && (
+        <CompareCarsModal
+          save={save}
+          onSelectCar={(carId) => {
+            updateSave((prev) =>
+              prev.cars[carId]?.owned ? { ...prev, selectedCarId: carId } : prev
+            );
+          }}
+          onOpenShop={() => setActiveModal('shop')}
+          onClose={() => setActiveModal('none')}
+        />
+      )}
+
+      {loadingLevel && (
+        <LoadingRaceOverlay level={loadingLevel} progressPct={loadingPct} />
       )}
 
       {pendingAd && (

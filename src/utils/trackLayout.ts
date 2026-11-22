@@ -46,7 +46,7 @@ export function createSeededRng(seed: number): () => number {
  */
 export function generateTrackLayout(level: LevelConfig): TrackLayout {
   const rng = createSeededRng(level.seed);
-  const roadWidth = 15.5;
+  const roadWidth = Math.max(12.2, Math.min(16.5, level.roadWidth ?? 15.5));
   const controlCount = 18;
   const baseRadius = level.trackLengthMeters / (Math.PI * 2);
 
@@ -98,7 +98,7 @@ export function generateTrackLayout(level: LevelConfig): TrackLayout {
   const cosRot = Math.cos(worldRot);
   const sinRot = Math.sin(worldRot);
   const sampleCount = 360;
-  const minAllowedSep = roadWidth * 2.55; // ~39.5m minimum clearance between non-adjacent segments
+  const minAllowedSep = Math.max(36, roadWidth * 2.6); // Safe minimum clearance between non-adjacent segments
   const up = new THREE.Vector3(0, 1, 0);
 
   let waveScale = 1.0;

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { CheckCircle2, Tv, Wrench, X } from 'lucide-react';
+import { getCarDisplayName } from '../data/brandConfig';
 import { CAR_SPECS } from '../data/cars';
 import { ShowroomCanvas } from '../engine/ShowroomCanvas';
 import { CarId, SaveState } from '../types/game';
@@ -22,7 +23,7 @@ export const RepairShopModal: React.FC<RepairShopModalProps> = ({
   const spec = CAR_SPECS[carId];
   const carState = save.cars[carId];
   const damagePct = getCarDamagePercent(carState);
-  const repairCost = getRepairCost(carState);
+  const repairCost = getRepairCost(carState, carId);
 
   const curTopSpeed = Math.round(
     spec.stats.topSpeedKmh * (1 - (carState.damage.engine / 100) * 0.28)
@@ -46,7 +47,7 @@ export const RepairShopModal: React.FC<RepairShopModalProps> = ({
       <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 bg-[#0b0e16] pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 md:py-3">
         <div className="min-w-0">
           <h2 className="font-display text-base sm:text-lg md:text-xl font-bold text-white leading-tight truncate">
-            REPAIR SHOP · {spec.brand} {spec.name}
+            REPAIR SHOP · {getCarDisplayName(spec)}
           </h2>
           <p className="text-xs text-slate-400">
             Points:{' '}

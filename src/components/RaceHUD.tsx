@@ -670,6 +670,27 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
                       </div>
                     </>
                   )}
+                  {telemetry.checkpointTimeLeftSec !== null && (
+                    <>
+                      <div className="h-[clamp(1.25rem,3vh,1.75rem)] w-px bg-white/15" />
+                      <div>
+                        <div className="text-[9px] sm:text-[10px] uppercase tracking-wider text-amber-300 leading-none mb-0.5">
+                          Next CP
+                        </div>
+                        <div
+                          className={`font-mono-num font-bold text-[clamp(0.75rem,1.9vw,1rem)] leading-none ${
+                            telemetry.checkpointTimeLeftSec <= 6
+                              ? 'text-red-400 animate-pulse'
+                              : telemetry.checkpointTimeLeftSec <= 12
+                                ? 'text-amber-300'
+                                : 'text-cyan-300'
+                          }`}
+                        >
+                          {telemetry.checkpointTimeLeftSec.toFixed(1)}s
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
             </div>
@@ -763,6 +784,11 @@ export const RaceHUD: React.FC<RaceHUDProps> = ({
           {telemetry.checkpointNotice && (
             <div className="bg-[#0b0e16]/85 border border-cyan-400/50 text-cyan-300 px-3.5 py-1 rounded-lg font-display font-semibold text-xs sm:text-sm tracking-wider">
               {telemetry.checkpointNotice}
+            </div>
+          )}
+          {telemetry.slipstreaming && telemetry.countdown < 0 && (
+            <div className="bg-cyan-500/20 border border-cyan-400/60 text-cyan-200 px-3.5 py-1 rounded-lg font-display font-bold text-xs sm:text-sm tracking-wider">
+              SLIPSTREAM DRAFT · +{telemetry.slipstreamBoostPct}% SPEED
             </div>
           )}
           {telemetry.drifting && (

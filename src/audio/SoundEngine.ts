@@ -38,6 +38,15 @@ const ENGINE_PROFILES: Record<EngineType, EngineHarmonicProfile> = {
     turboWhine: 0.52,
     growlCutoff: 1150,
   },
+  v10: {
+    baseFreq: 60,
+    maxFreq: 278,
+    harmonics: [1, 1.5, 2, 2.5, 3.33],
+    waveType: 'sawtooth',
+    subType: 'triangle',
+    turboWhine: 0.14,
+    growlCutoff: 1580,
+  },
   v12: {
     baseFreq: 66,
     maxFreq: 290,
@@ -46,6 +55,15 @@ const ENGINE_PROFILES: Record<EngineType, EngineHarmonicProfile> = {
     subType: 'triangle',
     turboWhine: 0.18,
     growlCutoff: 1650,
+  },
+  twin_turbo: {
+    baseFreq: 50,
+    maxFreq: 235,
+    harmonics: [1, 1.5, 2, 3],
+    waveType: 'sawtooth',
+    subType: 'sawtooth',
+    turboWhine: 0.78,
+    growlCutoff: 1250,
   },
   w16: {
     baseFreq: 40,
@@ -64,6 +82,15 @@ const ENGINE_PROFILES: Record<EngineType, EngineHarmonicProfile> = {
     subType: 'sine',
     turboWhine: 0.95,
     growlCutoff: 1850,
+  },
+  electric: {
+    baseFreq: 120,
+    maxFreq: 680,
+    harmonics: [1, 2, 3, 4],
+    waveType: 'sine',
+    subType: 'triangle',
+    turboWhine: 1.0,
+    growlCutoff: 2400,
   },
 };
 
@@ -293,41 +320,55 @@ export class SoundEngine {
       Math.min(1.08, (params.rpm - params.idleRpm) / Math.max(1000, params.redlineRpm - params.idleRpm))
     );
 
-    const fundamental = profile.baseFreq + (profile.maxFreq - profile.baseFreq) * Math.pow(rpmNorm, 0.92);
+    const isElectric = this.currentEngineType === 'electric';
+    const fundamental = isElectric
+      ? profile.baseFreq + (profile.maxFreq - profile.baseFreq) * Math.min(1, params.speedKmh / 330)
+      : profile.baseFreq + (profile.maxFreq - profile.baseFreq) * Math.pow(rpmNorm, 0.92);
+
     this.engineOscs.forEach((osc, idx) => {
       const mult = profile.harmonics[idx] ?? (idx + 1);
       osc.frequency.setTargetAtTime(fundamental * mult, now, 0.025);
     });
 
     if (this.engineFilter) {
-      const loadBoost = params.throttle * 750 + (params.nitroActive ? 500 : 0);
+      const loadBoost = params.throttle * (isElectric ? 1100 : 750) + (params.nitroActive ? 500 : 0);
       this.engineFilter.frequency.setTargetAtTime(
-        320 + rpmNorm * profile.growlCutoff + loadBoost,
+        (isElectric ? 620 : 320) + rpmNorm * profile.growlCutoff + loadBoost,
         now,
         0.04
       );
     }
 
     if (this.engineGain) {
-      const baseVol = this.settings.engineVolume * (0.18 + 0.22 * rpmNorm + 0.1 * params.throttle);
+      const speedOrLoad = isElectric
+        ? Math.min(1, params.speedKmh / 240) * 0.14 + 0.14 * params.throttle + 0.05
+        : 0.18 + 0.22 * rpmNorm + 0.1 * params.throttle;
+      const baseVol = this.settings.engineVolume * speedOrLoad;
       this.engineGain.gain.setTargetAtTime(baseVol, now, 0.03);
     }
 
     if (this.turboOsc && this.turboGain) {
-      const spool = Math.max(0, rpmNorm - 0.35) * profile.turboWhine * (0.4 + 0.6 * params.throttle);
-      this.turboOsc.frequency.setTargetAtTime(1600 + rpmNorm * 3200 + (params.nitroActive ? 900 : 0), now, 0.05);
-      this.turboGain.gain.setTargetAtTime(spool * 0.09, now, 0.05);
+      const spool = isElectric
+        ? (0.2 + 0.8 * Math.min(1, params.speedKmh / 280)) * (0.35 + 0.65 * params.throttle)
+        : Math.max(0, rpmNorm - 0.35) * profile.turboWhine * (0.4 + 0.6 * params.throttle);
+      const whineHz = isElectric
+        ? 1100 + Math.min(1, params.speedKmh / 340) * 4400 + (params.nitroActive ? 800 : 0)
+        : 1600 + rpmNorm * 3200 + (params.nitroActive ? 900 : 0);
+      this.turboOsc.frequency.setTargetAtTime(whineHz, now, 0.05);
+      this.turboGain.gain.setTargetAtTime(spool * (isElectric ? 0.12 : 0.09), now, 0.05);
     }
 
-    // Gear shift sound & exhaust pop on throttle lift
+    // Gear shift sound & exhaust pop on throttle lift (skip combustion pops for pure electric EV)
     if (params.gear !== this.lastGear && params.gear > 0) {
-      this.playGearShift();
-      if (params.gear < this.lastGear) {
-        this.playExhaustPop();
+      if (!isElectric) {
+        this.playGearShift();
+        if (params.gear < this.lastGear) {
+          this.playExhaustPop();
+        }
       }
       this.lastGear = params.gear;
     }
-    if (this.lastThrottle > 0.7 && params.throttle < 0.1 && rpmNorm > 0.55) {
+    if (!isElectric && this.lastThrottle > 0.7 && params.throttle < 0.1 && rpmNorm > 0.55) {
       this.playExhaustPop();
     }
     this.lastThrottle = params.throttle;

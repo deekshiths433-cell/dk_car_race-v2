@@ -69,7 +69,7 @@ export const PauseModal: React.FC<PauseModalProps> = ({
             className="w-full py-3 min-h-[44px] rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm inline-flex items-center justify-center gap-2 cursor-pointer"
           >
             <RotateCcw className="w-4 h-4 text-cyan-400" />
-            <span>Restart Circuit</span>
+            <span>Restart on new map</span>
           </button>
 
           <button

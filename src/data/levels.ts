@@ -1,11 +1,13 @@
 import {
   BiomeType,
+  DifficultySetting,
   FavoriteMapSeed,
   LevelConfig,
   TimeOfDay,
   TrackArchetype,
   WeatherType,
 } from '../types/game';
+import { getLevelRaceParameters } from './difficulty';
 import { createSeededRng } from '../utils/trackLayout';
 
 export const BIOME_META: Record<
@@ -84,23 +86,23 @@ const ARCHETYPE_SUFFIXES: Record<TrackArchetype, string[]> = {
   technical: ['Pro Circuit', 'Apex Gauntlet', 'Mastery Track'],
 };
 
-function computeDifficultyStats(levelNumber: number) {
-  const idx = Math.max(0, levelNumber - 1);
-  const rivalCount = Math.min(7, 2 + Math.floor(idx * 0.65));
-  const rivalSkill = Math.min(1.14, 0.72 + idx * 0.04);
-  const trackCurviness = Math.min(1.0, 0.35 + idx * 0.06);
-  const laps = levelNumber <= 2 ? 2 : levelNumber <= 6 ? 2 : 3;
-  const trackLengthMeters = 1550 + Math.min(1200, idx * 140);
-  const obstacleCount = Math.min(22, 3 + idx * 2);
-  const baseReward = 450 + idx * 180;
+function buildStatsFromDifficulty(
+  levelNumber: number,
+  difficultySetting: DifficultySetting = 'normal'
+) {
+  const params = getLevelRaceParameters(levelNumber, difficultySetting);
   return {
-    rivalCount,
-    rivalSkill,
-    trackCurviness,
-    laps,
-    trackLengthMeters,
-    obstacleCount,
-    baseReward,
+    rivalCount: params.rivalCount,
+    rivalSkill: params.factor,
+    difficultyName: params.difficultyName,
+    trackCurviness: params.trackCurviness,
+    roadWidth: params.roadWidth,
+    laps: params.laps,
+    trackLengthMeters: params.trackLengthMeters,
+    obstacleCount: params.obstacleCount,
+    collisionDamageMult: params.collisionDamageMult,
+    checkpointTimeLimitSec: params.checkpointTimeLimitSec,
+    baseReward: params.baseReward,
   };
 }
 
@@ -116,10 +118,9 @@ export function generateFreshMapSeed(lastSeed?: number): number {
 }
 
 /**
- * Generates a brand-new procedural race configuration every race (Play Race, Retry, Next Level),
+ * Generates a brand-new procedural race configuration for any infinite level (1..1000+),
  * rotating themes (never repeating the same biome or map seed twice in a row), varying time of day
- * & weather, and scaling difficulty by `levelNumber`.
- * If `favorite` is passed, replays that exact saved map seed & atmosphere.
+ * & weather, and scaling all difficulty curves from `difficulty.ts`.
  */
 export function generateRaceLevelConfig(
   levelNumber: number,
@@ -129,14 +130,16 @@ export function generateRaceLevelConfig(
     lastTimeOfDay?: TimeOfDay;
     lastWeather?: WeatherType;
     favorite?: FavoriteMapSeed;
+    difficultySetting?: DifficultySetting;
   }
 ): LevelConfig {
-  const stats = computeDifficultyStats(levelNumber);
+  const safeLevel = Math.max(1, Math.floor(levelNumber));
+  const stats = buildStatsFromDifficulty(safeLevel, options?.difficultySetting ?? 'normal');
 
   if (options?.favorite) {
     const fav = options.favorite;
     return {
-      levelNumber,
+      levelNumber: safeLevel,
       name: fav.name,
       biome: fav.biome,
       weather: fav.weather,
@@ -152,17 +155,16 @@ export function generateRaceLevelConfig(
   const seed = generateFreshMapSeed(options?.lastSeed);
   const rng = createSeededRng(seed);
 
-  // Rotate through themes, strictly excluding the previous biome so no two races repeat the same map theme
   let biome: BiomeType;
   if (options?.lastBiome) {
     const prevIdx = BIOME_CYCLE.indexOf(options.lastBiome);
     const offset = 1 + Math.floor(rng() * (BIOME_CYCLE.length - 1));
     biome = BIOME_CYCLE[(Math.max(0, prevIdx) + offset) % BIOME_CYCLE.length];
   } else {
-    biome = BIOME_CYCLE[(Math.max(0, levelNumber - 1) + Math.floor(rng() * BIOME_CYCLE.length)) % BIOME_CYCLE.length];
+    biome =
+      BIOME_CYCLE[(Math.max(0, safeLevel - 1) + Math.floor(rng() * BIOME_CYCLE.length)) % BIOME_CYCLE.length];
   }
 
-  // Varied time of day & weather per biome (never duplicating last race's exact combo)
   const timeOptions: Record<BiomeType, TimeOfDay[]> = {
     city: ['day', 'sunset', 'night'],
     desert: ['sunset', 'day', 'night'],
@@ -206,7 +208,7 @@ export function generateRaceLevelConfig(
   }`;
 
   return {
-    levelNumber,
+    levelNumber: safeLevel,
     name,
     biome,
     weather,
@@ -220,10 +222,15 @@ export function generateRaceLevelConfig(
 }
 
 /**
- * Deterministic preview config for Level Select & Home screen summary.
+ * Deterministic preview config for Level Select & Home screen summary (supports infinite levels).
  */
-export function getLevelConfig(levelNumber: number, raceRunSalt = 0): LevelConfig {
-  const idx = Math.max(0, levelNumber - 1);
+export function getLevelConfig(
+  levelNumber: number,
+  raceRunSalt = 0,
+  difficultySetting: DifficultySetting = 'normal'
+): LevelConfig {
+  const safeLevel = Math.max(1, Math.floor(levelNumber));
+  const idx = safeLevel - 1;
   const biome = BIOME_CYCLE[idx % BIOME_CYCLE.length];
   const tier = Math.floor(idx / BIOME_CYCLE.length);
 
@@ -244,23 +251,23 @@ export function getLevelConfig(levelNumber: number, raceRunSalt = 0): LevelConfi
     weather = tier % 2 === 1 ? 'rain' : 'clear';
   }
 
-  const stats = computeDifficultyStats(levelNumber);
+  const stats = buildStatsFromDifficulty(safeLevel, difficultySetting);
   const layoutArchetype = ARCHETYPE_POOL[idx % ARCHETYPE_POOL.length];
   const prefixes = BIOME_PREFIXES[biome];
   const suffixes = ARCHETYPE_SUFFIXES[layoutArchetype];
   const name = `${prefixes[idx % prefixes.length]} ${suffixes[tier % suffixes.length]}`;
 
   return {
-    levelNumber,
+    levelNumber: safeLevel,
     name,
     biome,
     weather,
     timeOfDay,
     ...stats,
-    seed: levelNumber * 9301 + raceRunSalt * 49297 + 1337,
+    seed: safeLevel * 9301 + raceRunSalt * 49297 + 1337,
     layoutArchetype,
     description: `${BIOME_META[biome].summary} ${stats.laps} laps · ${stats.rivalCount} AI rivals.`,
   };
 }
 
-export const PRESET_LEVEL_COUNT = 12;
+export const PRESET_LEVEL_COUNT = 18;

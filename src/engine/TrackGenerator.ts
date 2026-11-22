@@ -275,27 +275,48 @@ export function generateProceduralTrack(
     });
   });
 
-  // 8. Dynamic Obstacles (cones / construction barriers) scaling with level difficulty
+  // 8. Dynamic Obstacles (cones & traffic barriers) starting from Level 3+
   const obstacles: TrackObstacle[] = [];
-  const coneGeo = new THREE.ConeGeometry(0.45, 1.05, 10);
-  const coneMat = new THREE.MeshStandardMaterial({
-    color: 0xf97316,
-    emissive: 0x7c2d12,
-    emissiveIntensity: 0.3,
-    roughness: 0.45,
-  });
-  for (let i = 0; i < level.obstacleCount; i++) {
-    // Never place obstacles right on the start grid
-    const t = 0.08 + ((i + 0.5) / level.obstacleCount) * 0.86;
-    const s = samples[Math.floor(t * sampleCount)];
-    const sideOffset = (rng() > 0.5 ? 1 : -1) * (1.8 + rng() * (halfRoad - 3.2));
-    const pos = s.point.clone().addScaledVector(s.right, sideOffset);
-    pos.y += 0.52;
-    const cone = new THREE.Mesh(coneGeo, coneMat);
-    cone.position.copy(pos);
-    cone.castShadow = true;
-    group.add(cone);
-    obstacles.push({ position: pos, radius: 0.85, hit: false, mesh: cone });
+  if (level.obstacleCount > 0) {
+    const coneGeo = new THREE.ConeGeometry(0.45, 1.05, 10);
+    const coneMat = new THREE.MeshStandardMaterial({
+      color: 0xf97316,
+      emissive: 0x7c2d12,
+      emissiveIntensity: 0.3,
+      roughness: 0.45,
+    });
+    const barrierGeo = new THREE.BoxGeometry(1.75, 0.72, 0.52);
+    const barrierMat = new THREE.MeshStandardMaterial({
+      color: 0xdc2626,
+      emissive: 0x450a0a,
+      emissiveIntensity: 0.25,
+      roughness: 0.5,
+    });
+    for (let i = 0; i < level.obstacleCount; i++) {
+      // Never place obstacles right on the start grid
+      const t = 0.09 + ((i + 0.5) / level.obstacleCount) * 0.85;
+      const s = samples[Math.floor(t * sampleCount)];
+      const safeSpan = Math.max(1.8, halfRoad - 2.9);
+      const sideOffset = (rng() > 0.5 ? 1 : -1) * (1.8 + rng() * Math.max(0.5, safeSpan - 1.8));
+      const pos = s.point.clone().addScaledVector(s.right, sideOffset);
+      const isBarrier = i % 3 === 1 && level.levelNumber >= 4;
+      pos.y += isBarrier ? 0.36 : 0.52;
+      const mesh = isBarrier
+        ? new THREE.Mesh(barrierGeo, barrierMat)
+        : new THREE.Mesh(coneGeo, coneMat);
+      mesh.position.copy(pos);
+      if (isBarrier) {
+        mesh.rotation.y = Math.atan2(s.tangent.x, s.tangent.z);
+      }
+      mesh.castShadow = true;
+      group.add(mesh);
+      obstacles.push({
+        position: pos,
+        radius: isBarrier ? 1.08 : 0.85,
+        hit: false,
+        mesh,
+      });
+    }
   }
 
   // 9. Instanced Environment Scenery (buildings, trees, canyons, streetlights, crowds)

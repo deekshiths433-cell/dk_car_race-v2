@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ArrowDown,
   ArrowLeftRight,
@@ -11,8 +11,10 @@ import {
   RotateCcw,
   Smartphone,
   Volume2,
+  Wind,
   X,
 } from 'lucide-react';
+import { RACING_TIPS } from '../data/tips';
 
 interface HowToPlayModalProps {
   isFirstTime?: boolean;
@@ -25,6 +27,7 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({
   isMobile,
   onClose,
 }) => {
+  const [tab, setTab] = useState<'controls' | 'tips'>('controls');
   const controls = [
     {
       icon: ArrowUp,
@@ -115,8 +118,32 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({
         </button>
       </div>
 
+      <div className="shrink-0 flex gap-2 py-2 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 border-b border-white/10 bg-[#0d111a]">
+        {(
+          [
+            ['controls', 'Controls & Basics'],
+            ['tips', 'Winning Tips & Slipstream'],
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            type="button"
+            key={id}
+            onClick={() => setTab(id)}
+            className={`px-3.5 py-2 min-h-[38px] rounded-lg text-xs font-semibold cursor-pointer touch-manipulation ${
+              tab === id
+                ? 'bg-amber-500 text-slate-950'
+                : 'bg-slate-900 text-slate-300 hover:text-white'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       <div className="flex-1 min-h-0 dk-scroll p-4 pb-[max(1.25rem,env(safe-area-inset-bottom))] pl-[max(1rem,env(safe-area-inset-left))] pr-[max(1rem,env(safe-area-inset-right))] md:p-6">
         <div className="max-w-5xl mx-auto space-y-6">
+          {tab === 'controls' ? (
+            <>
           {/* Device Quick Summary */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="p-4 rounded-xl bg-[#0f1420] border border-white/10 flex items-start gap-3">
@@ -191,6 +218,50 @@ export const HowToPlayModal: React.FC<HowToPlayModalProps> = ({
               {isFirstTime ? 'GOT IT · LET’S RACE' : 'CLOSE GUIDE'}
             </button>
           </div>
+            </>
+          ) : (
+            <div className="space-y-4">
+              {/* Slipstream Highlight Card */}
+              <div className="p-4 rounded-xl bg-cyan-500/10 border border-cyan-400/35 flex items-start gap-3">
+                <Wind className="w-6 h-6 text-cyan-400 shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="font-display font-bold text-sm text-cyan-300 mb-1">
+                    Aero Slipstream Drafting (+9% Top Speed)
+                  </h3>
+                  <p className="text-xs text-slate-200 leading-relaxed">
+                    Stay directly behind a rival car (within 26m on straights) to enter their aerodynamic slipstream. The HUD flashes <strong>SLIPSTREAM DRAFT</strong> while giving up to +9% speed and +14% pull to slingshot past before the next braking zone.
+                  </p>
+                </div>
+              </div>
+
+              {/* Tips Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {RACING_TIPS.map((tip, idx) => (
+                  <div
+                    key={tip.title}
+                    className="p-4 rounded-xl bg-[#0f1420] border border-white/10 space-y-1.5"
+                  >
+                    <div className="text-[11px] font-mono-num font-bold text-amber-400 uppercase tracking-wider">
+                      Pro Strategy #{idx + 1}
+                    </div>
+                    <h4 className="font-display font-bold text-sm text-white">
+                      {tip.title}
+                    </h4>
+                    <p className="text-xs text-slate-300 leading-relaxed">{tip.body}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={onClose}
+                  className="px-6 py-3 min-h-[44px] rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-display font-bold text-sm cursor-pointer"
+                >
+                  {isFirstTime ? 'GOT IT · LET’S RACE' : 'CLOSE GUIDE'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

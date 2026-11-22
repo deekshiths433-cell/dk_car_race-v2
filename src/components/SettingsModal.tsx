@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { RotateCcw, Sliders, Volume2, X } from 'lucide-react';
 import {
   ControlMode,
+  DifficultySetting,
   GameSettings,
   HudVisibilityConfig,
   MobileLayoutConfig,
@@ -118,6 +119,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="max-w-4xl mx-auto space-y-6">
           {tab === 'general' && (
             <div className="space-y-4">
+              <div className="p-4 rounded-xl bg-[#0f1420] border border-white/10">
+                <h3 className="text-sm font-semibold text-white mb-1">
+                  Race Difficulty
+                </h3>
+                <p className="text-xs text-slate-400 mb-3">
+                  Adjusts rival pace scaling, overtaking aggression, defensive blocking, and checkpoint timers.
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      ['easy', 'Easy', '-6% Rival Pace'],
+                      ['normal', 'Normal', 'Matched Progression'],
+                      ['hard', 'Hard', '+5% Pace · Blocking · CP Timer'],
+                    ] as [DifficultySetting, string, string][]
+                  ).map(([val, title, sub]) => (
+                    <button
+                      type="button"
+                      key={val}
+                      onClick={() => onChange({ difficultySetting: val })}
+                      className={`p-2.5 rounded-lg border text-left cursor-pointer touch-manipulation ${
+                        (settings.difficultySetting ?? 'normal') === val
+                          ? 'bg-amber-500 border-amber-400 text-slate-950'
+                          : 'bg-slate-900 border-white/10 text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <div className="text-xs font-bold">{title}</div>
+                      <div
+                        className={`text-[10px] mt-0.5 ${
+                          (settings.difficultySetting ?? 'normal') === val
+                            ? 'text-slate-900 font-semibold'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {sub}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div className="p-4 rounded-xl bg-[#0f1420] border border-white/10">
                 <h3 className="text-sm font-semibold text-white mb-1">
                   Graphics Quality

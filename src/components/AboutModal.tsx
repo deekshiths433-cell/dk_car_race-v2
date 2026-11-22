@@ -1,5 +1,6 @@
 import React from 'react';
 import { X } from 'lucide-react';
+import { APP_VERSION, CREATOR_NAME } from '../data/brandConfig';
 import { DkLogo } from './DkLogo';
 
 interface AboutModalProps {
@@ -24,19 +25,19 @@ export const AboutModal: React.FC<AboutModalProps> = ({ onClose }) => {
         </div>
 
         <p className="text-sm text-slate-300 leading-relaxed mb-5">
-          DK Car Race is a high-speed 3D supercar racing experience built with Three.js PBR rendering, procedural circuit generation across 6 dynamic biomes, realistic gearbox/RPM vehicle dynamics, procedural per-engine audio synthesis, deep garage customization, and responsive cross-device desktop and mobile landscape controls.
+          DK Car Race is a high-speed 3D supercar racing experience featuring 16 speed-ranked supercars, Three.js PBR rendering, infinite procedural circuits across 6 dynamic biomes, aero slipstream drafting, per-engine procedural audio synthesis, deep garage tuning, and cross-device desktop & mobile landscape controls.
         </p>
 
         <div className="p-4 rounded-xl bg-slate-900 border border-white/10 space-y-2 text-sm">
           <div className="flex items-center justify-between">
             <span className="text-slate-400">Creator</span>
             <span className="font-display font-bold text-amber-400 text-base">
-              Created by DEEKSHITH.S
+              Created by {CREATOR_NAME}
             </span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-slate-400">Version</span>
-            <span className="font-mono-num text-white font-semibold">v1.0.0</span>
+            <span className="font-mono-num text-white font-semibold">{APP_VERSION}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-slate-400">Engine</span>

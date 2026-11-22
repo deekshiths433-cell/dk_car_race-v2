@@ -19,7 +19,9 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
   onClose,
 }) => {
   const totalShown = Math.max(PRESET_LEVEL_COUNT, save.highestUnlockedLevel + 1);
-  const levels = Array.from({ length: totalShown }, (_, i) => getLevelConfig(i + 1));
+  const levels = Array.from({ length: totalShown }, (_, i) =>
+    getLevelConfig(i + 1, 0, save.settings.difficultySetting ?? 'normal')
+  );
   const favorites = save.favoriteMaps ?? [];
 
   return (
@@ -154,7 +156,8 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
                         Random {biome.label} Rotation
                       </h3>
                       <p className="text-xs text-slate-400 leading-relaxed">
-                        AI Pace {Math.round(lvl.rivalSkill * 100)}% · Curviness {Math.round(lvl.trackCurviness * 100)}% · Generates a brand-new map & weather on every launch.
+                        {lvl.difficultyName} ({Math.round(lvl.rivalSkill * 100)}% Pace) · Curviness{' '}
+                        {Math.round(lvl.trackCurviness * 100)}% · Generates a brand-new map & weather on every launch.
                       </p>
                     </div>
 

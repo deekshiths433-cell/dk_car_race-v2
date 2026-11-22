@@ -1,4 +1,4 @@
-import { CAR_ORDER, CAR_SPECS } from '../data/cars';
+import { CAR_ECONOMY_CONFIG, CAR_ORDER, CAR_SPECS } from '../data/cars';
 import {
   Achievement,
   CarId,
@@ -64,6 +64,7 @@ export function getDefaultMobileLayout(leftHanded = false): MobileLayoutConfig {
 export function getDefaultSettings(): GameSettings {
   return {
     quality: 'auto',
+    difficultySetting: 'normal',
     speedUnit: 'kmh',
     hudScale: 1.0,
     hudElements: {
@@ -107,7 +108,7 @@ export function generateDailyMissions(): DailyMission[] {
       description: 'Complete 3 races in any biome',
       target: 3,
       progress: 0,
-      reward: 450,
+      reward: 500,
       claimed: false,
       type: 'races',
     },
@@ -117,7 +118,7 @@ export function generateDailyMissions(): DailyMission[] {
       description: 'Win 1st place in a race',
       target: 1,
       progress: 0,
-      reward: 650,
+      reward: 700,
       claimed: false,
       type: 'wins',
     },
@@ -127,7 +128,7 @@ export function generateDailyMissions(): DailyMission[] {
       description: 'Drift a total of 300 meters',
       target: 300,
       progress: 0,
-      reward: 500,
+      reward: 550,
       claimed: false,
       type: 'drift_meters',
     },
@@ -137,7 +138,7 @@ export function generateDailyMissions(): DailyMission[] {
       description: 'Trigger Nitro boost 5 times',
       target: 5,
       progress: 0,
-      reward: 400,
+      reward: 450,
       claimed: false,
       type: 'nitro_uses',
     },
@@ -158,28 +159,28 @@ export function getDefaultAchievements(): Achievement[] {
       title: '300+ km/h Club',
       description: 'Exceed 300 km/h on the road',
       unlocked: false,
-      reward: 600,
+      reward: 650,
     },
     {
       id: 'ach_400_club',
       title: 'Hypervelocity',
       description: 'Reach 400 km/h in a hypercar',
       unlocked: false,
-      reward: 1200,
+      reward: 1400,
     },
     {
       id: 'ach_collector',
       title: 'Supercar Collector',
       description: 'Own 3 or more supercars in your garage',
       unlocked: false,
-      reward: 1000,
+      reward: 1100,
     },
     {
       id: 'ach_clean_driver',
       title: 'Apex Surgeon',
       description: 'Finish a race with less than 5% car damage',
       unlocked: false,
-      reward: 550,
+      reward: 600,
     },
     {
       id: 'ach_night_rain',
@@ -204,7 +205,14 @@ function buildInitialCars(): Record<CarId, OwnedCarState> {
         rimColor: '#cbd5e1',
         tireStyle: 'street',
         caliperColor: spec.defaultCaliper,
-        spoilerStyle: id === 'porsche_gt3' || id === 'lamborghini_svj' ? 'gt_wing' : 'lip',
+        spoilerStyle:
+          id === 'porsche_gt3' ||
+          id === 'lamborghini_svj' ||
+          id === 'amg_gt_bs' ||
+          id === 'koenigsegg_jesko' ||
+          id === 'aston_valkyrie'
+            ? 'gt_wing'
+            : 'lip',
         bodyKit: 'stock',
         windowTint: 0.42,
         underglowEnabled: false,
@@ -250,31 +258,34 @@ export function createInitialSaveState(): SaveState {
       {
         id: 'seed_1',
         driverName: 'DEEKSHITH.S',
-        carName: 'Bugatti Chiron Pur Sport',
+        carName: 'Koenigsegg Jesko Absolut',
+        carId: 'koenigsegg_jesko',
         levelNumber: 1,
         biome: 'city',
-        bestTimeSec: 68.42,
-        points: 2450,
+        bestTimeSec: 65.18,
+        points: 2800,
         dateISO: '2026-11-20',
       },
       {
         id: 'seed_2',
         driverName: 'Apex_V12',
-        carName: 'Lamborghini Aventador SVJ',
+        carName: 'Bugatti Chiron Pur Sport',
+        carId: 'bugatti_chiron',
         levelNumber: 2,
         biome: 'desert',
-        bestTimeSec: 74.15,
-        points: 2100,
+        bestTimeSec: 71.42,
+        points: 2350,
         dateISO: '2026-11-20',
       },
       {
         id: 'seed_3',
         driverName: 'MaranelloGT',
         carName: 'Ferrari F8 Tributo',
+        carId: 'ferrari_f8',
         levelNumber: 3,
         biome: 'mountain',
-        bestTimeSec: 81.88,
-        points: 1850,
+        bestTimeSec: 79.88,
+        points: 1950,
         dateISO: '2026-11-20',
       },
     ],
@@ -344,9 +355,15 @@ export function loadSaveState(): SaveState {
         ? parsed.missions
         : generateDailyMissions();
 
+    const safeSelectedCarId: CarId =
+      parsed.selectedCarId && CAR_SPECS[parsed.selectedCarId] && mergedCars[parsed.selectedCarId]?.owned
+        ? parsed.selectedCarId
+        : 'bmw_m4';
+
     return {
       ...base,
       ...parsed,
+      selectedCarId: safeSelectedCarId,
       cars: mergedCars,
       ghostsByLevel:
         parsed.ghostsByLevel && typeof parsed.ghostsByLevel === 'object'
@@ -386,8 +403,14 @@ export function getCarDamagePercent(car: OwnedCarState): number {
   return Math.round((car.damage.body + car.damage.engine + car.damage.tires) / 3);
 }
 
-export function getRepairCost(car: OwnedCarState): number {
+export function getRepairCost(car: OwnedCarState, carId?: CarId): number {
   const avg = getCarDamagePercent(car);
   if (avg <= 0) return 0;
-  return Math.max(40, Math.round(avg * 9));
+  const carPrice = carId ? (CAR_SPECS[carId]?.price ?? 0) : 0;
+  const refPrice = Math.max(CAR_ECONOMY_CONFIG.startingPrice, carPrice);
+  const fullRepairBaseline =
+    CAR_ECONOMY_CONFIG.repairBaselineAtStarter *
+    Math.pow(refPrice / CAR_ECONOMY_CONFIG.startingPrice, CAR_ECONOMY_CONFIG.repairPriceExponent);
+  const scaled = Math.round((fullRepairBaseline * (avg / 100)) / 5) * 5;
+  return Math.max(25, scaled);
 }

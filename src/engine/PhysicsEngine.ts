@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getCarDisplayName } from '../data/brandConfig';
 import { CAR_SPECS, TIRE_STYLES } from '../data/cars';
 import {
   CarDamage,
@@ -17,6 +18,8 @@ export interface VehicleInput {
   handbrake: boolean;
   nitro: boolean;
 }
+
+export type AiDrivingStyle = 'clean' | 'aggressive' | 'blocker';
 
 export interface VehicleBody {
   id: string;
@@ -40,6 +43,7 @@ export interface VehicleBody {
   nitroActive: boolean;
   drifting: boolean;
   slipRatio: number;
+  slipstreamAmount: number; // 0..1 drafting boost factor
   bodyPitch: number;
   bodyRoll: number;
   damage: CarDamage;
@@ -57,6 +61,11 @@ export interface VehicleBody {
   passedCheckpoints: Set<number>;
   aiTargetOffset: number;
   aiSpeedFactor: number;
+  aiStyle: AiDrivingStyle;
+  aiMatchedMaxSpeedMs?: number;
+  aiMatchedAccelMult?: number;
+  aiMatchedGripMult?: number;
+  aiRubberBandMult?: number;
 }
 
 export function createVehicleBody(
@@ -68,19 +77,28 @@ export function createVehicleBody(
   ownedState?: OwnedCarState,
   aiSpeedFactor = 1,
   driverName?: string,
-  track?: GeneratedTrack
+  track?: GeneratedTrack,
+  aiConfig?: {
+    matchedMaxSpeedMs?: number;
+    matchedAccelMult?: number;
+    matchedGripMult?: number;
+    aiStyle?: AiDrivingStyle;
+  }
 ): VehicleBody {
   const spec = CAR_SPECS[carId];
   const initialNearest = track ? track.getNearestSample(startPos) : null;
   const initialT = initialNearest ? initialNearest.sample.t : 0;
   const hasCrossedStart = initialT <= 0.5;
   const initialProgress = hasCrossedStart ? initialT : initialT - 1;
+  const carName = getCarDisplayName(spec);
 
   return {
     id,
     driverName: driverName ?? (isPlayer ? 'You' : id.toUpperCase()),
-    carName: `${spec.brand} ${spec.name}`,
-    topSpeedKmh: spec.stats.topSpeedKmh,
+    carName,
+    topSpeedKmh: aiConfig?.matchedMaxSpeedMs
+      ? Math.round(aiConfig.matchedMaxSpeedMs * 3.6)
+      : spec.stats.topSpeedKmh,
     isPlayer,
     carId,
     spec,
@@ -98,6 +116,7 @@ export function createVehicleBody(
     nitroActive: false,
     drifting: false,
     slipRatio: 0,
+    slipstreamAmount: 0,
     bodyPitch: 0,
     bodyRoll: 0,
     damage: ownedState ? { ...ownedState.damage } : { body: 0, engine: 0, tires: 0 },
@@ -113,8 +132,13 @@ export function createVehicleBody(
     bestLapSec: null,
     currentLapStartSec: 0,
     passedCheckpoints: new Set<number>(),
-    aiTargetOffset: (Math.random() - 0.5) * 6.5,
+    aiTargetOffset: (Math.random() - 0.5) * 5.2,
     aiSpeedFactor,
+    aiStyle: aiConfig?.aiStyle ?? 'clean',
+    aiMatchedMaxSpeedMs: aiConfig?.matchedMaxSpeedMs,
+    aiMatchedAccelMult: aiConfig?.matchedAccelMult,
+    aiMatchedGripMult: aiConfig?.matchedGripMult,
+    aiRubberBandMult: 1,
   };
 }
 
@@ -140,6 +164,7 @@ export function stepVehiclePhysics(
   }
 ): void {
   const stats = v.spec.stats;
+  const dmgMult = level.collisionDamageMult ?? 1;
 
   // Upgrades & Damage multipliers
   const engLvl = ownedState ? ownedState.upgrades.engineLevel : 0;
@@ -156,14 +181,27 @@ export function stepVehiclePhysics(
   const weatherGrip =
     level.weather === 'snow' ? 0.72 : level.weather === 'rain' ? 0.85 : 1.0;
 
-  // Real-world top speed in m/s
+  // Slipstream aero draft boost (up to +9% top speed, +14% drive acceleration)
+  const slipstreamSpeedMult = 1 + v.slipstreamAmount * 0.09;
+  const slipstreamAccelMult = 1 + v.slipstreamAmount * 0.14;
+
+  // Real-world top speed in m/s (rivals use difficulty-matched ceiling + subtle variation + light fair rubber-band)
   const topSpeedBonus = 1 + engLvl * 0.018 + turboLvl * 0.012;
-  const maxSpeedMs = (stats.topSpeedKmh / 3.6) * topSpeedBonus * engineDamagePenalty;
+  const baseMaxSpeedMs =
+    !v.isPlayer && v.aiMatchedMaxSpeedMs
+      ? v.aiMatchedMaxSpeedMs * v.aiSpeedFactor * (v.aiRubberBandMult ?? 1)
+      : (stats.topSpeedKmh / 3.6) * topSpeedBonus * engineDamagePenalty;
+
+  const maxSpeedMs = baseMaxSpeedMs * slipstreamSpeedMult;
 
   // Acceleration calibrated from real 0-100 km/h time
   const baseZeroTo100Accel = (100 / 3.6) / Math.max(1.8, stats.zeroToHundredSec);
-  const accelUpgrade = 1 + engLvl * 0.035 + turboLvl * 0.04;
-  let peakDriveAccel = baseZeroTo100Accel * 1.18 * accelUpgrade * engineDamagePenalty;
+  const accelUpgrade =
+    !v.isPlayer && v.aiMatchedAccelMult
+      ? v.aiMatchedAccelMult * v.aiSpeedFactor * (v.aiRubberBandMult ?? 1)
+      : 1 + engLvl * 0.035 + turboLvl * 0.04;
+  let peakDriveAccel =
+    baseZeroTo100Accel * 1.18 * accelUpgrade * engineDamagePenalty * slipstreamAccelMult;
 
   // Nitro
   if (input.nitro && v.nitro > 1 && input.throttle > 0.1) {
@@ -201,7 +239,6 @@ export function stepVehiclePhysics(
   // Longitudinal forces
   let longAccel = 0;
   if (input.throttle > 0.01) {
-    // Torque curve falloff approaching top speed
     const speedFrac = Math.max(0, forwardSpeed / effectiveMaxSpeed);
     const torqueCurve = Math.max(0.05, 1 - Math.pow(speedFrac, 1.85));
     longAccel += input.throttle * peakDriveAccel * torqueCurve;
@@ -212,7 +249,6 @@ export function stepVehiclePhysics(
       const brakePower = (16.5 + (stats.braking / 100) * 14) * (1 + brakesLvl * 0.05) * weatherGrip;
       longAccel -= input.brake * brakePower;
     } else {
-      // Reverse gear
       const revMax = 18;
       if (forwardSpeed > -revMax) {
         longAccel -= input.brake * 11.5;
@@ -227,20 +263,22 @@ export function stepVehiclePhysics(
     longAccel -= aeroDrag + (input.throttle < 0.05 ? rollingDrag : 0);
   }
 
-  // Lateral grip & drift dynamics
-  const baseGrip =
-    (0.88 + (stats.handling / 100) * 0.42 + tiresLvl * 0.03 + tireStyleGrip) *
-    tireDamagePenalty *
-    weatherGrip;
+  // Lateral grip & drift dynamics (AI gets matched grip so corners feel competitive)
+  const rawGrip =
+    !v.isPlayer && v.aiMatchedGripMult
+      ? v.aiMatchedGripMult * weatherGrip
+      : (0.88 + (stats.handling / 100) * 0.42 + tiresLvl * 0.03 + tireStyleGrip) *
+        tireDamagePenalty *
+        weatherGrip;
 
-  const gripStrength = input.handbrake ? baseGrip * 0.34 : baseGrip;
+  const gripStrength = input.handbrake ? rawGrip * 0.34 : rawGrip;
   const latFriction = -lateralSpeed * gripStrength * 7.2;
 
   // Apply accelerations
   v.velocity.addScaledVector(_fwd, longAccel * dt);
   v.velocity.addScaledVector(_right, latFriction * dt);
 
-  // Steering yaw rate based on bicycle model + drift boost
+  // Steering yaw rate based on bicycle model
   if (Math.abs(forwardSpeed) > 0.4) {
     const dirSign = forwardSpeed >= 0 ? 1 : -1;
     const yawRate =
@@ -300,9 +338,9 @@ export function stepVehiclePhysics(
       v.velocity.addScaledVector(postNearest.sample.right, -sign * outSpeed * 1.35);
       v.velocity.multiplyScalar(0.84);
       if (v.isPlayer) {
-        v.damage.body = Math.min(100, v.damage.body + impact * 5.2);
-        v.damage.tires = Math.min(100, v.damage.tires + impact * 2.5);
-        v.damage.engine = Math.min(100, v.damage.engine + impact * 3.1);
+        v.damage.body = Math.min(100, v.damage.body + impact * 5.2 * dmgMult);
+        v.damage.tires = Math.min(100, v.damage.tires + impact * 2.5 * dmgMult);
+        v.damage.engine = Math.min(100, v.damage.engine + impact * 3.1 * dmgMult);
       }
       callbacks.onCollision?.(impact, v.position);
     }
@@ -319,8 +357,8 @@ export function stepVehiclePhysics(
       obs.mesh.visible = false;
       v.velocity.multiplyScalar(0.82);
       if (v.isPlayer) {
-        v.damage.body = Math.min(100, v.damage.body + 4.5);
-        v.damage.tires = Math.min(100, v.damage.tires + 3.0);
+        v.damage.body = Math.min(100, v.damage.body + 4.5 * dmgMult);
+        v.damage.tires = Math.min(100, v.damage.tires + 3.0 * dmgMult);
       }
       callbacks.onCollision?.(0.6, v.position);
     }
@@ -360,7 +398,7 @@ export function stepVehiclePhysics(
   } else {
     const wheelRpm = (Math.abs(v.speedMs) / (2 * Math.PI * stats.wheelRadius)) * 60;
     const gearCount = stats.gearRatios.length;
-    let chosenGear = Math.max(1, v.gear);
+    let chosenGear = Math.max(1, Math.min(gearCount, v.gear));
     const calcRpm = (g: number) =>
       Math.max(stats.idleRpm, wheelRpm * stats.gearRatios[g - 1] * stats.finalDrive * 1.85);
 
@@ -380,7 +418,6 @@ export function stepVehiclePhysics(
   if (!v.finished) {
     const t = postNearest.sample.t;
 
-    // Transition cleanly across start line from grid spawn (behind t=1.0 -> t=0.0)
     if (!v.hasCrossedStart) {
       if (v.lastT > 0.85 && t < 0.15) {
         v.hasCrossedStart = true;
@@ -389,7 +426,6 @@ export function stepVehiclePhysics(
       }
     }
 
-    // Checkpoints (only count after crossing start line on the current lap)
     if (v.hasCrossedStart) {
       for (const cp of track.checkpoints) {
         if (!v.passedCheckpoints.has(cp.index)) {
@@ -402,11 +438,11 @@ export function stepVehiclePhysics(
       }
     }
 
-    // Detect crossing start/finish line forward after hitting checkpoints (t wraps from >0.85 to <0.15)
     if (v.hasCrossedStart && v.lastT > 0.85 && t < 0.15 && v.passedCheckpoints.size >= 2) {
-      const wrapSpan = (1 - v.lastT) + t;
-      const crossFrac = wrapSpan > 0.0001 ? THREE.MathUtils.clamp((1 - v.lastT) / wrapSpan, 0, 1) : 1;
-      const exactCrossTime = Math.max(0, (raceTimeSec - dt) + dt * crossFrac);
+      const wrapSpan = 1 - v.lastT + t;
+      const crossFrac =
+        wrapSpan > 0.0001 ? THREE.MathUtils.clamp((1 - v.lastT) / wrapSpan, 0, 1) : 1;
+      const exactCrossTime = Math.max(0, raceTimeSec - dt + dt * crossFrac);
 
       const lapTime = exactCrossTime - v.currentLapStartSec;
       v.currentLapStartSec = exactCrossTime;
@@ -430,15 +466,12 @@ export function stepVehiclePhysics(
       }
     }
 
-    // Compute continuous monotonic progress across start/finish wrap boundaries
     let lapFraction: number;
     if (!v.hasCrossedStart) {
       lapFraction = t > 0.5 ? t - 1 : t;
     } else if (v.lastT < 0.15 && t > 0.85) {
-      // Reversed slightly backward across the start/finish line without completing a lap
       lapFraction = t - 1;
     } else if (v.lapsCompleted === 0 && v.passedCheckpoints.size === 0 && t > 0.85) {
-      // Still behind start line after backing up
       lapFraction = t - 1;
     } else {
       lapFraction = t;
@@ -453,17 +486,85 @@ export function stepVehiclePhysics(
 export function computeAiInput(
   ai: VehicleBody,
   track: GeneratedTrack,
-  level: LevelConfig
+  level: LevelConfig,
+  allVehicles: VehicleBody[] = []
 ): VehicleInput {
   const len = Math.max(1, track.samples.length);
   const lookAheadIdx = (ai.trackHintIndex + 10) % len;
   const futureIdx = (ai.trackHintIndex + 24) % len;
+  const apexIdx = (ai.trackHintIndex + 16) % len;
   const targetSample = track.samples[lookAheadIdx];
   const futureSample = track.samples[futureIdx];
+  const apexSample = track.samples[apexIdx];
+
+  // Dynamic racing line shift into corners (hugging apex on tight curves)
+  const curveVecX = futureSample.tangent.x - targetSample.tangent.x;
+  const curveVecZ = futureSample.tangent.z - targetSample.tangent.z;
+  const turnSign =
+    targetSample.right.x * curveVecX + targetSample.right.z * curveVecZ;
+  const cornerCurvature = 1 - targetSample.tangent.dot(futureSample.tangent);
+  const roadHalf = track.roadWidth * 0.34;
+
+  let desiredLatOffset = ai.aiTargetOffset * 0.55;
+  if (cornerCurvature > 0.08) {
+    desiredLatOffset = Math.sign(turnSign) * Math.min(roadHalf, roadHalf * (0.4 + cornerCurvature * 1.4));
+  }
+
+  // Smart overtaking & defensive blocking on high difficulty
+  for (let i = 0; i < allVehicles.length; i++) {
+    const other = allVehicles[i];
+    if (other.id === ai.id || other.finished) continue;
+
+    const dx = other.position.x - ai.position.x;
+    const dz = other.position.z - ai.position.z;
+    const distSq = dx * dx + dz * dz;
+    if (distSq > 676) continue; // > 26m
+
+    const forwardDot = dx * targetSample.tangent.x + dz * targetSample.tangent.z;
+    const latDelta = dx * targetSample.right.x + dz * targetSample.right.z;
+
+    // Overtake slower car directly ahead
+    if (forwardDot > 2.5 && forwardDot < 25 && Math.abs(latDelta) < 3.0) {
+      const avoidDir = latDelta >= 0 ? -1 : 1;
+      desiredLatOffset += avoidDir * 3.4;
+    }
+
+    // Defensive blocking on Hard+ against charging player behind
+    if (
+      other.isPlayer &&
+      (ai.aiStyle === 'blocker' || level.rivalSkill >= 0.97) &&
+      forwardDot < -3 &&
+      forwardDot > -18 &&
+      Math.abs(latDelta) < 4.5
+    ) {
+      desiredLatOffset = THREE.MathUtils.clamp(
+        desiredLatOffset + Math.sign(latDelta) * 1.35,
+        -roadHalf,
+        roadHalf
+      );
+    }
+  }
+
+  // Dodge upcoming track obstacles
+  for (let i = 0; i < track.obstacles.length; i++) {
+    const obs = track.obstacles[i];
+    if (obs.hit) continue;
+    const dx = obs.position.x - ai.position.x;
+    const dz = obs.position.z - ai.position.z;
+    const distSq = dx * dx + dz * dz;
+    if (distSq > 576) continue;
+    const fwdDist = dx * targetSample.tangent.x + dz * targetSample.tangent.z;
+    const latDist = dx * targetSample.right.x + dz * targetSample.right.z;
+    if (fwdDist > 2 && fwdDist < 22 && Math.abs(latDist) < 2.6) {
+      desiredLatOffset += (latDist >= 0 ? -1 : 1) * 3.2;
+    }
+  }
+
+  desiredLatOffset = THREE.MathUtils.clamp(desiredLatOffset, -roadHalf, roadHalf);
 
   const targetPos = _steerVec
-    .copy(targetSample.point)
-    .addScaledVector(targetSample.right, ai.aiTargetOffset);
+    .copy(apexSample.point)
+    .addScaledVector(apexSample.right, desiredLatOffset);
 
   const dx = targetPos.x - ai.position.x;
   const dz = targetPos.z - ai.position.z;
@@ -473,25 +574,32 @@ export function computeAiInput(
   while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
   while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
 
-  const steer = THREE.MathUtils.clamp(-yawDiff * 1.8, -1, 1);
+  const steer = THREE.MathUtils.clamp(-yawDiff * 1.9, -1, 1);
 
-  // Slow slightly for sharp upcoming corners
-  const cornerCurvature = 1 - targetSample.tangent.dot(futureSample.tangent);
-  const cornerBrake = cornerCurvature > 0.25 && ai.speedKmh > 165 ? 0.55 : 0;
-  const throttle = cornerBrake > 0 ? 0.25 : Math.min(1, 0.86 * level.rivalSkill * ai.aiSpeedFactor);
+  // Corner braking calibrated to level difficulty & speed
+  const safeCornerSpeed = cornerCurvature > 0.34 ? 145 : cornerCurvature > 0.2 ? 195 : 999;
+  const cornerBrake = ai.speedKmh > safeCornerSpeed ? 0.62 : 0;
+  const skillThrottleBase = THREE.MathUtils.clamp(0.84 + level.rivalSkill * 0.14, 0.84, 1.0);
+  const throttle = cornerBrake > 0 ? 0.24 : skillThrottleBase;
+
+  const useNitro =
+    cornerCurvature < 0.045 &&
+    ai.nitro > 40 &&
+    (ai.slipstreamAmount > 0.25 || level.rivalSkill >= 0.9 || ai.aiStyle === 'aggressive');
 
   return {
     throttle,
     brake: cornerBrake,
     steer,
     handbrake: false,
-    nitro: cornerCurvature < 0.04 && ai.nitro > 45 && level.rivalSkill > 0.9,
+    nitro: useNitro,
   };
 }
 
 export function resolveCarToCarCollisions(
   vehicles: VehicleBody[],
-  onPlayerHit?: (intensity: number, pos: THREE.Vector3) => void
+  onPlayerHit?: (intensity: number, pos: THREE.Vector3) => void,
+  collisionDamageMult = 1
 ): void {
   const minDist = 2.65;
   const minDistSq = minDist * minDist;
@@ -530,8 +638,8 @@ export function resolveCarToCarCollisions(
           const intensity = Math.min(1, Math.abs(relVelAlongNormal) / 18);
           if ((a.isPlayer || b.isPlayer) && intensity > 0.15) {
             const p = a.isPlayer ? a : b;
-            p.damage.body = Math.min(100, p.damage.body + intensity * 4.2);
-            p.damage.engine = Math.min(100, p.damage.engine + intensity * 2.1);
+            p.damage.body = Math.min(100, p.damage.body + intensity * 4.2 * collisionDamageMult);
+            p.damage.engine = Math.min(100, p.damage.engine + intensity * 2.1 * collisionDamageMult);
             onPlayerHit?.(intensity, p.position);
           }
         }
@@ -539,3 +647,4 @@ export function resolveCarToCarCollisions(
     }
   }
 }
+

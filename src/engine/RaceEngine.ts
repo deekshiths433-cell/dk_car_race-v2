@@ -3,7 +3,9 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { getCarDisplayName } from '../data/brandConfig';
 import { CAR_ORDER, CAR_SPECS } from '../data/cars';
+import { AI_RIVAL_VARIATION_RANGE, computeMatchedRivalStats } from '../data/difficulty';
 import { BIOME_META } from '../data/levels';
 import {
   CameraMode,
@@ -22,6 +24,7 @@ import { SoundEngine } from '../audio/SoundEngine';
 import { BuiltCarRig, buildSupercarModel } from './CarBuilder';
 import { ParticleSystem } from './ParticleSystem';
 import {
+  AiDrivingStyle,
   computeAiInput,
   createVehicleBody,
   resolveCarToCarCollisions,
@@ -107,6 +110,7 @@ export class RaceEngine {
   private countdown = 3;
   private countdownTimer = 0;
   private raceTimeSec = 0;
+  private checkpointTimeLeftSec: number | null = null;
   private playerFinishTimeSec = 0;
   private cleanDrivingScore = 0;
   private driftScore = 0;
@@ -169,6 +173,7 @@ export class RaceEngine {
   }) {
     this.container = params.container;
     this.level = params.level;
+    this.checkpointTimeLeftSec = params.level.checkpointTimeLimitSec ?? null;
     this.ownedCarState = params.ownedCarState;
     this.settings = params.settings;
     this.sound = params.sound;
@@ -355,7 +360,59 @@ export class RaceEngine {
     const startYaw = Math.atan2(startSample.tangent.x, startSample.tangent.z);
     const totalCars = 1 + this.level.rivalCount;
 
-    // Player starts at back-right or mid-grid to encourage exciting overtakes
+    const playerSpec = CAR_SPECS[playerCarId];
+    const matched = computeMatchedRivalStats(
+      playerSpec,
+      this.ownedCarState,
+      this.level.levelNumber,
+      this.settings.difficultySetting
+    );
+
+    // Seeded pseudo-random generator so each race draws fresh rival names, colors, models, and styles
+    let rng = (this.level.seed * 1664525 + 1013904223) >>> 0;
+    const nextRand = () => {
+      rng = (rng * 1664525 + 1013904223) >>> 0;
+      return rng / 4294967296;
+    };
+
+    const driverNames = [
+      'Kaito_R',
+      'ElenaGT',
+      'Veloce_V12',
+      'SiennaApex',
+      'Max_K',
+      'Dante_RS',
+      'NovaEV',
+      'RicoTurbo',
+      'Zara_X',
+      'ViktorGT',
+      'Aria_V8',
+      'LeonDrift',
+    ];
+    for (let i = driverNames.length - 1; i > 0; i--) {
+      const j = Math.floor(nextRand() * (i + 1));
+      [driverNames[i], driverNames[j]] = [driverNames[j], driverNames[i]];
+    }
+
+    const aiPalette = [
+      '#ef4444',
+      '#f59e0b',
+      '#0ea5e9',
+      '#10b981',
+      '#e2e8f0',
+      '#8b5cf6',
+      '#f97316',
+      '#ec4899',
+      '#14b8a6',
+    ];
+    for (let i = aiPalette.length - 1; i > 0; i--) {
+      const j = Math.floor(nextRand() * (i + 1));
+      [aiPalette[i], aiPalette[j]] = [aiPalette[j], aiPalette[i]];
+    }
+
+    const styles: AiDrivingStyle[] = ['clean', 'aggressive', 'blocker'];
+    const playerIdx = CAR_ORDER.indexOf(playerCarId);
+
     for (let slot = 0; slot < totalCars; slot++) {
       const isPlayer = slot === totalCars - 1;
       const row = Math.floor(slot / 2);
@@ -368,27 +425,37 @@ export class RaceEngine {
         .addScaledVector(startSample.tangent, -backDist)
         .addScaledVector(startSample.right, latDist);
 
-      const carId = isPlayer
-        ? playerCarId
-        : CAR_ORDER[(slot + this.level.levelNumber) % CAR_ORDER.length];
+      // Pick varied supercar models anchored around the player's car tier + surprise faster/slower picks
+      const tierOffset = Math.floor(nextRand() * 7) - 3;
+      const pickedIdx = Math.max(0, Math.min(CAR_ORDER.length - 1, playerIdx + tierOffset));
+      const carId = isPlayer ? playerCarId : CAR_ORDER[pickedIdx];
+      const spec = CAR_SPECS[carId];
 
-      const aiPalette = ['#ef4444', '#f59e0b', '#0ea5e9', '#10b981', '#e2e8f0', '#8b5cf6', '#f97316'];
+      const paintHex = aiPalette[slot % aiPalette.length];
       const customization = isPlayer
         ? this.ownedCarState.customization
         : {
-            paintColor: aiPalette[slot % aiPalette.length],
-            paintFinish: 'metallic' as const,
-            rimStyle: 'y_spoke' as const,
-            rimColor: '#cbd5e1',
+            paintColor: paintHex,
+            paintFinish: (nextRand() > 0.65 ? 'gloss' : 'metallic') as 'gloss' | 'metallic',
+            rimStyle: spec.defaultRim,
+            rimColor: nextRand() > 0.5 ? '#cbd5e1' : '#0f172a',
             tireStyle: 'semi_slick' as const,
-            caliperColor: '#ef4444',
-            spoilerStyle: 'gt_wing' as const,
-            bodyKit: 'sport' as const,
+            caliperColor: paintHex === '#ef4444' ? '#facc15' : '#ef4444',
+            spoilerStyle: (nextRand() > 0.35 ? 'gt_wing' : 'lip') as 'gt_wing' | 'lip',
+            bodyKit: (nextRand() > 0.5 ? 'sport' : 'stock') as 'sport' | 'stock',
             windowTint: 0.55,
             underglowEnabled: this.level.timeOfDay === 'night',
-            underglowColor: aiPalette[slot % aiPalette.length],
+            underglowColor: paintHex,
             unlockedItems: [],
           };
+
+      const variation = 1 + (nextRand() * 2 - 1) * AI_RIVAL_VARIATION_RANGE;
+      const aiStyle =
+        this.level.levelNumber >= 4
+          ? styles[slot % styles.length]
+          : nextRand() > 0.45
+            ? 'clean'
+            : 'aggressive';
 
       const body = createVehicleBody(
         isPlayer ? 'player' : `ai_${slot}`,
@@ -397,13 +464,23 @@ export class RaceEngine {
         pos,
         startYaw,
         isPlayer ? this.ownedCarState : undefined,
-        0.92 + (slot % 3) * 0.06,
-        isPlayer ? 'You' : `Rival ${slot + 1}`,
-        this.track
+        variation,
+        isPlayer ? 'You' : driverNames[slot % driverNames.length],
+        this.track,
+        isPlayer
+          ? undefined
+          : {
+              matchedMaxSpeedMs: matched.rivalTargetTopSpeedKmh / 3.6,
+              matchedAccelMult: matched.rivalAccelScale,
+              matchedGripMult: matched.rivalGripScale,
+              aiStyle,
+            }
       );
+
       const rig = buildSupercarModel(carId, customization, {
         enableSpotLights: isPlayer && !this.isSoftwareGl,
         isPlayer,
+        useLod: !isPlayer,
       });
       rig.root.position.copy(pos);
       rig.root.rotation.y = startYaw;
@@ -472,7 +549,7 @@ export class RaceEngine {
     this.ghostRig.root.visible = this.settings.showGhost !== false;
     this.scene.add(this.ghostRig.root);
     console.log(
-      `[DK Car Race][Ghost] Spawned personal best ghost (${spec.brand} ${spec.name}, PB ${this.ghostConfig.bestTimeSec.toFixed(2)}s, ${
+      `[DK Car Race][Ghost] Spawned personal best ghost (${getCarDisplayName(spec)}, PB ${this.ghostConfig.bestTimeSec.toFixed(2)}s, ${
         this.ghostConfig.samples ? 'recorded telemetry' : 'procedural pace'
       })`
     );
@@ -830,6 +907,15 @@ export class RaceEngine {
     if (this.countdown < 0) {
       this.raceTimeSec += dt;
 
+      // Update optional checkpoint countdown timer
+      if (this.checkpointTimeLeftSec !== null && !this.raceFinished) {
+        this.checkpointTimeLeftSec = Math.max(0, this.checkpointTimeLeftSec - dt);
+        if (this.checkpointTimeLeftSec <= 0) {
+          this.handlePlayerFinish(true);
+          return;
+        }
+      }
+
       if (!this.raceFinished) {
         // Track nitro activations
         if (this.playerBody.nitroActive && !this.wasNitroActive) {
@@ -843,13 +929,53 @@ export class RaceEngine {
         }
       }
 
+      // Compute Slipstream aero draft & subtle fair rubber-banding per vehicle
+      const playerDist = this.playerBody.trackDistanceMeters;
+      for (let i = 0; i < this.vehicles.length; i++) {
+        const v = this.vehicles[i];
+        const vFwdX = Math.sin(v.yaw);
+        const vFwdZ = Math.cos(v.yaw);
+        const vRightX = Math.cos(v.yaw);
+        const vRightZ = -Math.sin(v.yaw);
+
+        let maxDraft = 0;
+        if (!v.finished && v.speedKmh > 55) {
+          for (let j = 0; j < this.vehicles.length; j++) {
+            if (i === j) continue;
+            const lead = this.vehicles[j];
+            if (lead.finished) continue;
+            const dx = lead.position.x - v.position.x;
+            const dz = lead.position.z - v.position.z;
+            const fwdDist = dx * vFwdX + dz * vFwdZ;
+            const latDist = Math.abs(dx * vRightX + dz * vRightZ);
+            if (fwdDist > 2.5 && fwdDist < 22 && latDist < 2.6) {
+              const distStrength = 1 - Math.abs(fwdDist - 10) / 14;
+              const latStrength = 1 - latDist / 2.6;
+              maxDraft = Math.max(maxDraft, THREE.MathUtils.clamp(distStrength * latStrength, 0, 1));
+            }
+          }
+        }
+        v.slipstreamAmount = THREE.MathUtils.damp(v.slipstreamAmount, maxDraft, 7, dt);
+
+        if (!v.isPlayer && !v.finished) {
+          const gapMeters = playerDist - v.trackDistanceMeters;
+          const targetRb =
+            gapMeters > 55
+              ? Math.min(1.055, 1 + (gapMeters - 55) * 0.0008)
+              : gapMeters < -95
+                ? 0.985
+                : 1.0;
+          v.aiRubberBandMult = THREE.MathUtils.damp(v.aiRubberBandMult ?? 1, targetRb, 2.5, dt);
+        }
+      }
+
       let playerJustFinished = false;
       let anyRivalJustFinished = false;
       for (const v of this.vehicles) {
         let vInput: VehicleInput;
         if (v.finished) {
           // Coast gently past the finish gantry along the track spline while keeping finish stats locked
-          const cruise = computeAiInput(v, this.track, this.level);
+          const cruise = computeAiInput(v, this.track, this.level, this.vehicles);
           vInput = {
             throttle: Math.min(0.32, cruise.throttle),
             brake: cruise.brake,
@@ -858,7 +984,7 @@ export class RaceEngine {
             nitro: false,
           };
         } else {
-          vInput = v.isPlayer ? input : computeAiInput(v, this.track, this.level);
+          vInput = v.isPlayer ? input : computeAiInput(v, this.track, this.level, this.vehicles);
         }
 
         stepVehiclePhysics(
@@ -878,11 +1004,19 @@ export class RaceEngine {
             },
             onCheckpoint: () => {
               this.sound.playCheckpointChime();
-              this.checkpointNotice = 'CHECKPOINT';
+              if (this.level.checkpointTimeLimitSec !== null) {
+                this.checkpointTimeLeftSec = this.level.checkpointTimeLimitSec;
+                this.checkpointNotice = 'CHECKPOINT · TIME EXTENDED';
+              } else {
+                this.checkpointNotice = 'CHECKPOINT';
+              }
               this.checkpointNoticeTimer = 1.4;
             },
             onLapComplete: (lapTime) => {
               this.sound.playCheckpointChime();
+              if (this.level.checkpointTimeLimitSec !== null) {
+                this.checkpointTimeLeftSec = this.level.checkpointTimeLimitSec + 5;
+              }
               this.checkpointNotice = `LAP ${v.lap} · ${lapTime.toFixed(2)}s`;
               this.checkpointNoticeTimer = 2.0;
             },
@@ -903,9 +1037,13 @@ export class RaceEngine {
         );
       }
 
-      resolveCarToCarCollisions(this.vehicles, (intensity, pos) => {
-        if (!this.raceFinished) this.triggerImpact(intensity, pos);
-      });
+      resolveCarToCarCollisions(
+        this.vehicles,
+        (intensity, pos) => {
+          if (!this.raceFinished) this.triggerImpact(intensity, pos);
+        },
+        this.level.collisionDamageMult ?? 1
+      );
 
       // Record initial and periodic keyframes for future personal-best ghost runs
       if (!this.playerBody.finished) {
@@ -913,7 +1051,7 @@ export class RaceEngine {
       }
 
       if (playerJustFinished) {
-        this.handlePlayerFinish();
+        this.handlePlayerFinish(false);
       } else if (anyRivalJustFinished && this.raceFinished && this.onStandingsUpdate) {
         const updatedStandings = buildRaceStandings(
           this.vehicles,
@@ -1312,11 +1450,14 @@ export class RaceEngine {
       gear: this.playerBody.gear,
       nitro: Math.round(this.playerBody.nitro),
       nitroActive: this.playerBody.nitroActive,
+      slipstreaming: this.playerBody.slipstreamAmount > 0.12,
+      slipstreamBoostPct: Math.round(this.playerBody.slipstreamAmount * 9),
       position: posRank,
       totalCars: this.vehicles.length,
       lap: this.playerBody.lap,
       totalLaps: this.level.laps,
       raceTimeSec: this.raceTimeSec,
+      checkpointTimeLeftSec: this.checkpointTimeLeftSec,
       bestLapSec: this.playerBody.bestLapSec,
       countdown: this.countdown,
       headlightsMode: this.headlightsMode,
@@ -1363,7 +1504,7 @@ export class RaceEngine {
     });
   }
 
-  private handlePlayerFinish(): void {
+  private handlePlayerFinish(timedOut = false): void {
     if (this.raceFinished) return;
     this.raceFinished = true;
     this.cameraMode = 'cinematic';
@@ -1406,17 +1547,18 @@ export class RaceEngine {
       playerFinishTime
     );
 
-    const positionPoints = computePositionPoints(
+    const rawPosPoints = computePositionPoints(
       this.level.baseReward,
       position,
       this.vehicles.length
     );
+    const positionPoints = timedOut ? Math.round(rawPosPoints * 0.25) : rawPosPoints;
     const cleanBonus = Math.min(350, Math.round(this.cleanDrivingScore * 0.4));
     const driftBonus = Math.min(300, Math.round(this.driftScore * 0.8));
     const nitroBonus = Math.min(200, this.nitroUses * 30);
 
     console.log(
-      `[DK Car Race] Final Standings (Level ${this.level.levelNumber} · ${this.level.name} · Seed #${this.level.seed}): Player placed ${position} / ${this.vehicles.length} in ${playerFinishTime.toFixed(2)}s (+${positionPoints} pts)`
+      `[DK Car Race] Final Standings (Level ${this.level.levelNumber} · ${this.level.name} · Seed #${this.level.seed}${timedOut ? ' · TIMED OUT' : ''}): Player placed ${position} / ${this.vehicles.length} in ${playerFinishTime.toFixed(2)}s (+${positionPoints} pts)`
     );
     for (const v of this.vehicles) {
       console.log(
@@ -1456,7 +1598,8 @@ export class RaceEngine {
       totalPointsEarned: positionPoints + cleanBonus + driftBonus + nitroBonus,
       isNewBestTime: false,
       newDamage: { ...this.playerBody.damage },
-      unlockedNextLevel: position <= 3,
+      unlockedNextLevel: !timedOut && position <= 3,
+      timedOut,
       standings,
       ghostSamples: compactGhostSamples,
       ghostBestTimeSec: this.ghostConfig?.bestTimeSec ?? null,

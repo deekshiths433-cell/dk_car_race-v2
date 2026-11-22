@@ -1,6 +1,8 @@
-import React from 'react';
-import { ArrowRight, Bookmark, Car, Flag, Home, RotateCcw, Trophy } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { ArrowRight, Bookmark, Car, Flag, Home, Lightbulb, RotateCcw, Trophy } from 'lucide-react';
+import { getCarDisplayName } from '../data/brandConfig';
 import { CAR_SPECS } from '../data/cars';
+import { pickRacingTip } from '../data/tips';
 import { RaceResult } from '../types/game';
 import { getResultsHeadline } from '../utils/raceStandings';
 
@@ -48,10 +50,14 @@ export const ResultsModal: React.FC<ResultsModalProps> = ({
   onHome,
 }) => {
   const spec = CAR_SPECS[result.carId];
-  const podium = result.position <= 3;
-  const headline = getResultsHeadline(result.position);
+  const podium = !result.timedOut && result.position <= 3;
+  const headline = result.timedOut ? 'TIME EXPIRED' : getResultsHeadline(result.position);
   const suffix = getOrdinalSuffix(result.position);
   const standings = result.standings ?? [];
+  const tip = useMemo(
+    () => pickRacingTip(result.level.seed + result.position),
+    [result.level.seed, result.position]
+  );
   const leaderTime =
     standings.length > 0
       ? standings[0].finishTimeSec ?? standings[0].estimatedTimeSec
@@ -115,10 +121,12 @@ export const ResultsModal: React.FC<ResultsModalProps> = ({
             <span className="text-slate-400 text-sm">/ {result.totalCars}</span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
-            {result.position === 1
-              ? 'You finished in 1st place!'
-              : `Finished ${result.position}${suffix} out of ${result.totalCars} racers`}{' '}
-            · {spec.brand} {spec.name} · Time{' '}
+            {result.timedOut
+              ? 'Checkpoint countdown expired before finish'
+              : result.position === 1
+                ? 'You finished in 1st place!'
+                : `Finished ${result.position}${suffix} out of ${result.totalCars} racers`}{' '}
+            · {getCarDisplayName(spec)} · Time{' '}
             <span className="font-mono-num text-white font-semibold">
               {formatRaceTime(result.finishTimeSec)}
             </span>
@@ -256,6 +264,17 @@ export const ResultsModal: React.FC<ResultsModalProps> = ({
           </div>
         </div>
 
+        {/* Racing Strategy Tip */}
+        <div className="p-3 rounded-xl bg-slate-900/90 border border-amber-500/20 flex items-start gap-2.5 text-left">
+          <Lightbulb className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-amber-300">
+              Tip · {tip.title}
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed mt-0.5">{tip.body}</p>
+          </div>
+        </div>
+
         {/* Action Buttons */}
         <div className="grid grid-cols-2 gap-2.5">
           <button
@@ -275,7 +294,7 @@ export const ResultsModal: React.FC<ResultsModalProps> = ({
             className="py-3 min-h-[44px] rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs inline-flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <RotateCcw className="w-4 h-4 text-cyan-400" />
-            <span>Retry</span>
+            <span>Retry on new map</span>
           </button>
 
           <button

@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Tv, X, Zap } from 'lucide-react';
+import { getCarDisplayName, getCarName } from '../data/brandConfig';
 import {
   BODYKIT_STYLES,
   CALIPER_COLORS,
+  CAR_ORDER,
+  CAR_RANK_MAP,
   CAR_SPECS,
   PAINT_FINISHES,
   PAINT_SWATCHES,
@@ -18,6 +21,7 @@ import { showRewardedAd } from '../utils/ads';
 
 interface GarageModalProps {
   save: SaveState;
+  onSelectCar: (carId: CarId) => void;
   onUpdateCustomization: (carId: CarId, patch: Partial<CarCustomization>, cost?: number, unlockKey?: string) => void;
   onUpgradePart: (carId: CarId, part: keyof CarUpgrades, cost: number) => void;
   onClose: () => void;
@@ -25,6 +29,7 @@ interface GarageModalProps {
 
 export const GarageModal: React.FC<GarageModalProps> = ({
   save,
+  onSelectCar,
   onUpdateCustomization,
   onUpgradePart,
   onClose,
@@ -35,6 +40,10 @@ export const GarageModal: React.FC<GarageModalProps> = ({
   const carState = save.cars[carId];
   const c = carState.customization;
   const u = carState.upgrades;
+  const ownedCarIds = useMemo(
+    () => CAR_ORDER.filter((id) => save.cars[id]?.owned),
+    [save.cars]
+  );
 
   const isUnlocked = (key: string, cost: number) =>
     cost === 0 || c.unlockedItems.includes(key);
@@ -132,7 +141,7 @@ export const GarageModal: React.FC<GarageModalProps> = ({
       <div className="shrink-0 flex items-center justify-between gap-3 border-b border-white/10 bg-[#0b0e16] pt-[max(0.5rem,env(safe-area-inset-top))] pb-2.5 max-lg:landscape:py-1.5 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] md:px-6 md:py-3">
         <div className="min-w-0">
           <h2 className="font-display text-base sm:text-lg md:text-xl font-bold text-white leading-tight truncate">
-            GARAGE · {spec.brand} {spec.name}
+            GARAGE · #{CAR_RANK_MAP[carId]} {getCarDisplayName(spec)}
           </h2>
           <p className="text-xs text-slate-400">
             Drag car to inspect 360° · Points:{' '}
@@ -166,6 +175,33 @@ export const GarageModal: React.FC<GarageModalProps> = ({
         </div>
 
         <div className="lg:col-span-5 flex flex-col lg:min-h-0 border-t lg:border-t-0 lg:border-l border-white/10 bg-[#0d111a]">
+          {/* Quick Switch Owned Supercars (sorted by speed) */}
+          {ownedCarIds.length > 1 && (
+            <div className="shrink-0 px-2.5 py-2 border-b border-white/10 bg-[#0b0e16] flex items-center gap-1.5 overflow-x-auto">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 shrink-0 mr-1">
+                Switch:
+              </span>
+              {ownedCarIds.map((oid) => {
+                const oSpec = CAR_SPECS[oid];
+                const active = oid === carId;
+                return (
+                  <button
+                    type="button"
+                    key={oid}
+                    onClick={() => onSelectCar(oid)}
+                    className={`px-2.5 py-1.5 min-h-[34px] rounded-lg text-[11px] font-semibold shrink-0 whitespace-nowrap cursor-pointer touch-manipulation ${
+                      active
+                        ? 'bg-emerald-500 text-slate-950 font-bold'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/10'
+                    }`}
+                  >
+                    #{CAR_RANK_MAP[oid]} {getCarName(oSpec)} ({oSpec.stats.topSpeedKmh})
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {/* Tabs */}
           <div className="shrink-0 grid grid-cols-4 gap-1 p-2 border-b border-white/10 bg-[#0b0e16] pl-[max(0.5rem,env(safe-area-inset-left))] pr-[max(0.5rem,env(safe-area-inset-right))] lg:pl-2 lg:pr-2">
             {(

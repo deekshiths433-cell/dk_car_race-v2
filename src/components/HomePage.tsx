@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  ArrowLeftRight,
   Award,
   BookOpen,
   Car,
@@ -10,6 +11,7 @@ import {
   ShoppingBag,
   Wrench,
 } from 'lucide-react';
+import { APP_VERSION, CREATOR_NAME, getCarDisplayName } from '../data/brandConfig';
 import { CAR_SPECS } from '../data/cars';
 import { BIOME_META, getLevelConfig } from '../data/levels';
 import { SaveState } from '../types/game';
@@ -22,6 +24,7 @@ export type ActiveModal =
   | 'garage'
   | 'repair'
   | 'shop'
+  | 'compare'
   | 'levels'
   | 'rewards'
   | 'howto'
@@ -44,8 +47,9 @@ export const HomePage: React.FC<HomePageProps> = ({
   const carSpec = CAR_SPECS[save.selectedCarId];
   const carState = save.cars[save.selectedCarId];
   const damagePct = getCarDamagePercent(carState);
-  const level = getLevelConfig(save.currentLevel);
+  const level = getLevelConfig(save.currentLevel, 0, save.settings.difficultySetting ?? 'normal');
   const biome = BIOME_META[level.biome];
+  const carDisplayName = getCarDisplayName(carSpec);
 
   const unclaimedRewards =
     save.missions.filter((m) => m.progress >= m.target && !m.claimed).length;
@@ -117,7 +121,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             </div>
 
             <h1 className="font-display text-lg sm:text-xl font-bold text-white leading-tight">
-              {carSpec.brand} {carSpec.name}
+              {carDisplayName}
             </h1>
 
             <p className="text-[11px] text-slate-300 leading-snug">
@@ -150,6 +154,9 @@ export const HomePage: React.FC<HomePageProps> = ({
               <span>Settings</span>
             </button>
           </div>
+          <div className="text-[10px] text-slate-400 font-mono-num">
+            {APP_VERSION} · Created by {CREATOR_NAME}
+          </div>
         </div>
 
         {/* Right Column: Prominent PLAY RACE + Level Select + Menu Grid */}
@@ -172,10 +179,19 @@ export const HomePage: React.FC<HomePageProps> = ({
             <button
               type="button"
               onClick={() => onOpenModal('levels')}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-3 min-h-[50px] rounded-xl bg-[#0b0e16]/90 hover:bg-slate-800 border border-white/15 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation"
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-3 min-h-[50px] rounded-xl bg-[#0b0e16]/90 hover:bg-slate-800 border border-white/15 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation"
             >
               <Flag className="w-4 h-4 text-cyan-400 shrink-0" />
               <span>Levels</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenModal('compare')}
+              className="inline-flex items-center justify-center gap-1.5 px-3 py-3 min-h-[50px] rounded-xl bg-[#0b0e16]/90 hover:bg-slate-800 border border-white/15 text-white text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer touch-manipulation"
+            >
+              <ArrowLeftRight className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>Compare</span>
             </button>
           </div>
 
@@ -208,7 +224,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             <div>
               <span className="text-slate-400 mr-1.5">Car</span>
               <span className="font-semibold text-white">
-                {carSpec.brand} {carSpec.name}
+                {carDisplayName}
               </span>
             </div>
             <span className="text-slate-600 hidden sm:inline" aria-hidden="true">
@@ -246,10 +262,10 @@ export const HomePage: React.FC<HomePageProps> = ({
         <div className="flex flex-col md:flex-row items-start md:items-end justify-between gap-4 my-auto">
           <div className="w-full max-w-md bg-[#0b0e16]/82 border border-white/10 rounded-xl p-4 sm:p-5 md:p-6">
             <p className="text-xs font-medium text-amber-400 tracking-wider uppercase mb-1">
-              Level {level.levelNumber} · {level.name}
+              Level {level.levelNumber} · {level.name} · {level.difficultyName}
             </p>
             <h1 className="font-display text-2xl sm:text-3xl md:text-5xl font-bold text-white tracking-tight leading-none mb-2.5 sm:mb-3">
-              {carSpec.brand} {carSpec.name}
+              {carDisplayName}
             </h1>
             <p className="text-xs md:text-sm text-slate-300 leading-relaxed mb-4">
               {carSpec.stats.topSpeedKmh} km/h Top Speed · 0–100 in{' '}
@@ -293,6 +309,15 @@ export const HomePage: React.FC<HomePageProps> = ({
                 <Flag className="w-4 h-4 text-cyan-400" />
                 <span>Level Select</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => onOpenModal('compare')}
+                className="inline-flex items-center justify-center gap-2 px-4 py-3.5 min-h-[48px] rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-sm font-semibold transition-colors whitespace-nowrap cursor-pointer touch-manipulation"
+              >
+                <ArrowLeftRight className="w-4 h-4 text-emerald-400" />
+                <span>Compare Cars</span>
+              </button>
             </div>
 
             {isDesktop && (
@@ -304,7 +329,7 @@ export const HomePage: React.FC<HomePageProps> = ({
         </div>
 
         {/* Unified Bottom Navigation Dock: All Required Menu Destinations */}
-        <footer className="w-full flex justify-center">
+        <footer className="w-full flex flex-col items-center gap-2">
           <div className="w-full max-w-5xl bg-[#0b0e16]/90 border border-white/10 rounded-xl p-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
             {menuButtons.map((btn) => {
               const Icon = btn.icon;
@@ -320,6 +345,9 @@ export const HomePage: React.FC<HomePageProps> = ({
                 </button>
               );
             })}
+          </div>
+          <div className="text-[11px] text-slate-400 font-mono-num">
+            {APP_VERSION} · Created by {CREATOR_NAME} · 16 Speed-Ranked Supercars
           </div>
         </footer>
       </div>

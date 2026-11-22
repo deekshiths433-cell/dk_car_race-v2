@@ -1,38 +1,72 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   Bookmark,
+  Clock,
   Cloud,
   Flag,
   MapPin,
   Play,
+  ShoppingBag,
   Shuffle,
   Sun,
+  Wrench,
 } from 'lucide-react';
+import { getCarDisplayName } from '../data/brandConfig';
+import { CAR_SPECS } from '../data/cars';
+import { computeMatchedRivalStats } from '../data/difficulty';
 import { BIOME_META } from '../data/levels';
-import { LevelConfig } from '../types/game';
+import {
+  CarId,
+  DifficultySetting,
+  LevelConfig,
+  OwnedCarState,
+} from '../types/game';
 import { generateTrackLayout } from '../utils/trackLayout';
 
 interface RaceIntroModalProps {
   level: LevelConfig;
+  playerCarId: CarId;
+  ownedCarState: OwnedCarState;
+  difficultySetting: DifficultySetting;
   isFavorite: boolean;
   onStartCountdown: () => void;
   onRerollMap: () => void;
   onToggleFavorite: () => void;
+  onOpenGarage: () => void;
+  onOpenShop: () => void;
   onCancel: () => void;
 }
 
 export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
   level,
+  playerCarId,
+  ownedCarState,
+  difficultySetting,
   isFavorite,
   onStartCountdown,
   onRerollMap,
   onToggleFavorite,
+  onOpenGarage,
+  onOpenShop,
   onCancel,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const layout = useMemo(() => generateTrackLayout(level), [level]);
   const biome = BIOME_META[level.biome];
+  const playerSpec = CAR_SPECS[playerCarId] ?? CAR_SPECS.bmw_m4;
+
+  const matched = useMemo(
+    () =>
+      computeMatchedRivalStats(
+        playerSpec,
+        ownedCarState,
+        level.levelNumber,
+        difficultySetting
+      ),
+    [playerSpec, ownedCarState, level.levelNumber, difficultySetting]
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -44,7 +78,6 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     const h = canvas.height;
     ctx.clearRect(0, 0, w, h);
 
-    // Subtle dark slate grid backdrop
     ctx.fillStyle = '#090d16';
     ctx.fillRect(0, 0, w, h);
 
@@ -81,7 +114,6 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     const pts = layout.minimapPoints.map((p) => toCanvas(p.x, p.z));
     if (pts.length < 3) return;
 
-    // Outer shoulder glow
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = biome.accent;
@@ -96,24 +128,20 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     ctx.stroke();
     ctx.globalAlpha = 1;
 
-    // Main asphalt road outline
     ctx.strokeStyle = '#334155';
     ctx.lineWidth = 10;
     ctx.stroke();
 
-    // Inner track surface
     ctx.strokeStyle = '#e2e8f0';
     ctx.lineWidth = 3.2;
     ctx.stroke();
 
-    // Racing centerline dash
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 1.1;
     ctx.setLineDash([5, 5]);
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // Direction arrow near 15% track progress
     const arrowSample = layout.samples[Math.floor(layout.samples.length * 0.14)];
     if (arrowSample) {
       const ap = toCanvas(arrowSample.point.x, arrowSample.point.z);
@@ -132,7 +160,6 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
       ctx.restore();
     }
 
-    // Checkpoints
     ctx.font = '600 9px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -149,12 +176,9 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
       ctx.fillText(`${idx + 1}`, p.x, p.y + 0.5);
     });
 
-    // Start point marker (grid behind line)
     const startP = toCanvas(layout.startPoint.x, layout.startPoint.z);
-    // Finish line marker
     const finishP = toCanvas(layout.finishPoint.x, layout.finishPoint.z);
 
-    // Draw perpendicular finish checkered strip across road
     const fTan = layout.samples[0].tangent;
     const fRight = layout.samples[0].right;
     const perpLen = 9;
@@ -165,7 +189,6 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     ctx.lineTo(finishP.x + fRight.x * perpLen, finishP.y + fRight.z * perpLen);
     ctx.stroke();
 
-    // Start circle (emerald)
     ctx.fillStyle = '#10b981';
     ctx.beginPath();
     ctx.arc(startP.x, startP.y, 6, 0, Math.PI * 2);
@@ -174,7 +197,6 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     ctx.lineWidth = 1.8;
     ctx.stroke();
 
-    // Finish diamond (amber)
     ctx.save();
     ctx.translate(finishP.x, finishP.y);
     ctx.rotate(Math.PI / 4);
@@ -185,7 +207,6 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     ctx.strokeRect(-5, -5, 10, 10);
     ctx.restore();
 
-    // Clear Start & Finish callout tags positioned cleanly away from each other
     const tanScreenX = fTan.x;
     const tanScreenY = fTan.z;
     const startLabelX = Math.max(36, Math.min(w - 36, startP.x - tanScreenX * 22 - 18));
@@ -193,7 +214,6 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     const finishLabelX = Math.max(38, Math.min(w - 38, finishP.x + tanScreenX * 22 + 18));
     const finishLabelY = Math.max(14, Math.min(h - 14, finishP.y + tanScreenY * 22 - 12));
 
-    // START badge
     ctx.fillStyle = 'rgba(6, 78, 59, 0.92)';
     ctx.strokeStyle = '#10b981';
     ctx.lineWidth = 1;
@@ -205,7 +225,6 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     ctx.font = 'bold 9px sans-serif';
     ctx.fillText('START', startLabelX, startLabelY + 0.5);
 
-    // FINISH badge
     ctx.fillStyle = 'rgba(120, 53, 15, 0.92)';
     ctx.strokeStyle = '#f59e0b';
     ctx.lineWidth = 1;
@@ -218,6 +237,14 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
   }, [layout, biome.accent]);
 
   const kmLength = (layout.totalLength / 1000).toFixed(2);
+  const diffColor =
+    matched.difficultyName === 'Easy'
+      ? 'text-emerald-400'
+      : matched.difficultyName === 'Medium'
+        ? 'text-cyan-400'
+        : matched.difficultyName === 'Hard'
+          ? 'text-amber-400'
+          : 'text-red-400';
 
   return (
     <div className="fixed inset-0 z-40 h-dvh w-full bg-[#090b10]/78 dk-scroll flex flex-col p-3 sm:p-5 pt-[max(0.75rem,env(safe-area-inset-top))] pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))]">
@@ -230,9 +257,11 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
                 Level {level.levelNumber} · {biome.label}
               </span>
               <span className="text-slate-600">·</span>
-              <span className="font-mono-num text-slate-400">
-                Seed #{level.seed}
+              <span className={diffColor}>
+                {matched.difficultyName} ({Math.round(matched.difficultyFactor * 100)}%)
               </span>
+              <span className="text-slate-600">·</span>
+              <span className="font-mono-num text-slate-400">Seed #{level.seed}</span>
               {level.isFavoriteReplay && (
                 <>
                   <span className="text-slate-600">·</span>
@@ -267,7 +296,7 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
               ref={canvasRef}
               width={360}
               height={210}
-              className="w-full h-[155px] sm:h-[185px] max-lg:landscape:h-[135px] rounded-lg block"
+              className="w-full h-[150px] sm:h-[180px] max-lg:landscape:h-[128px] rounded-lg block"
             />
             <div className="flex items-center justify-between px-1.5 pt-1.5 text-[10px] text-slate-400">
               <span className="inline-flex items-center gap-1 text-emerald-400 font-semibold">
@@ -280,40 +309,95 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
             </div>
           </div>
 
-          <div className="sm:col-span-5 max-lg:landscape:col-span-6 flex flex-col justify-between gap-2.5 bg-slate-900/90 border border-white/10 rounded-xl p-3">
-            <p className="text-xs text-slate-300 leading-relaxed max-lg:landscape:text-[11px]">
-              {biome.summary}
-            </p>
+          <div className="sm:col-span-5 max-lg:landscape:col-span-6 flex flex-col justify-between gap-2 bg-slate-900/90 border border-white/10 rounded-xl p-3">
+            {/* Player Speed vs Rivals Top Speed Matchup */}
+            <div className="bg-slate-950/80 border border-white/10 rounded-lg p-2.5 space-y-1.5">
+              <div className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider truncate">
+                {getCarDisplayName(playerSpec)} vs Grid
+              </div>
+              <div className="flex items-center justify-between text-xs font-mono-num">
+                <div>
+                  <div className="text-[10px] text-slate-400">Your Car</div>
+                  <div className="font-bold text-emerald-400">
+                    {matched.playerEffectiveTopSpeedKmh} km/h
+                  </div>
+                </div>
+                <div className="text-slate-600 text-[10px] font-bold">VS</div>
+                <div className="text-right">
+                  <div className="text-[10px] text-slate-400">Rivals Top</div>
+                  <div className="font-bold text-amber-300">
+                    {matched.rivalTargetTopSpeedKmh} km/h
+                  </div>
+                </div>
+              </div>
+            </div>
 
-            <div className="grid grid-cols-2 gap-2 text-xs font-mono-num">
-              <div className="bg-slate-950/70 rounded-lg px-2.5 py-2 border border-white/5">
+            <div className="grid grid-cols-2 gap-1.5 text-xs font-mono-num">
+              <div className="bg-slate-950/70 rounded-lg px-2.5 py-1.5 border border-white/5">
                 <div className="text-[10px] text-slate-400 uppercase font-sans">Length</div>
                 <div className="font-bold text-white">{kmLength} km</div>
               </div>
-              <div className="bg-slate-950/70 rounded-lg px-2.5 py-2 border border-white/5">
+              <div className="bg-slate-950/70 rounded-lg px-2.5 py-1.5 border border-white/5">
                 <div className="text-[10px] text-slate-400 uppercase font-sans">Race</div>
                 <div className="font-bold text-white">
                   {level.laps} Laps · {level.rivalCount} Rivals
                 </div>
               </div>
-              <div className="bg-slate-950/70 rounded-lg px-2.5 py-2 border border-white/5 flex items-center gap-1.5">
+              <div className="bg-slate-950/70 rounded-lg px-2 py-1.5 border border-white/5 flex items-center gap-1.5">
                 <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                 <span className="capitalize text-slate-200 truncate">{level.timeOfDay}</span>
               </div>
-              <div className="bg-slate-950/70 rounded-lg px-2.5 py-2 border border-white/5 flex items-center gap-1.5">
+              <div className="bg-slate-950/70 rounded-lg px-2 py-1.5 border border-white/5 flex items-center gap-1.5">
                 <Cloud className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
                 <span className="capitalize text-slate-200 truncate">{level.weather}</span>
               </div>
             </div>
 
             <div className="text-[11px] text-slate-400 flex items-center justify-between pt-1 border-t border-white/10">
-              <span>Difficulty Tier</span>
-              <span className="font-mono-num font-semibold text-amber-300">
-                {Math.round(level.rivalSkill * 100)}% AI Pace · {level.obstacleCount} Hazards
+              <span>Hazards · Timer</span>
+              <span className="font-mono-num font-semibold text-amber-300 inline-flex items-center gap-1">
+                <span>
+                  {level.obstacleCount === 0 ? 'Clean Track' : `${level.obstacleCount} Cones`}
+                </span>
+                {level.checkpointTimeLimitSec !== null && (
+                  <>
+                    <span className="text-slate-600">·</span>
+                    <Clock className="w-3 h-3 text-cyan-400" />
+                    <span className="text-cyan-300">{level.checkpointTimeLimitSec}s CP</span>
+                  </>
+                )}
               </span>
             </div>
           </div>
         </div>
+
+        {/* Underpowered / Damage Advisory Banner */}
+        {matched.isUnderpowered && matched.underpoweredReason && (
+          <div className="p-2.5 sm:p-3 rounded-xl bg-amber-950/55 border border-amber-400/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+            <div className="flex items-start gap-2 text-amber-100">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <span>{matched.underpoweredReason}</span>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={onOpenGarage}
+                className="px-2.5 py-1.5 min-h-[34px] rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer touch-manipulation"
+              >
+                <Wrench className="w-3.5 h-3.5" />
+                <span>Open Garage</span>
+              </button>
+              <button
+                type="button"
+                onClick={onOpenShop}
+                className="px-2.5 py-1.5 min-h-[34px] rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer touch-manipulation"
+              >
+                <ShoppingBag className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Car Shop</span>
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Action Row */}
         <div className="flex flex-wrap sm:flex-nowrap items-stretch gap-2.5">
@@ -348,3 +432,4 @@ export const RaceIntroModal: React.FC<RaceIntroModalProps> = ({
     </div>
   );
 };
+

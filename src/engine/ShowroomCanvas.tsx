@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUniformsLib.js';
 import { CAR_SPECS } from '../data/cars';
+import { getCarDisplayName } from '../data/brandConfig';
 import { CarCustomization, CarId } from '../types/game';
 import { buildSupercarModel, BuiltCarRig } from './CarBuilder';
 import { createSafeWebGLRenderer, probeWebGL } from './webglSupport';
@@ -408,7 +409,11 @@ export const ShowroomCanvas: React.FC<ShowroomCanvasProps> = ({
       ctx.fillStyle = 'rgba(148,163,184,0.75)';
       ctx.font = '600 12px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(`${spec.brand} ${spec.name} · 2D Studio Preview`, cx, h - 18);
+      ctx.fillText(
+        `${getCarDisplayName(spec)} · 2D Studio Preview`,
+        cx,
+        h - 18
+      );
 
       frameId = requestAnimationFrame(draw);
     };

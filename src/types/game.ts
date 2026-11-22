@@ -1,12 +1,58 @@
 export type CarId =
-  | 'lamborghini_svj'
-  | 'bugatti_chiron'
-  | 'ferrari_f8'
-  | 'porsche_gt3'
   | 'bmw_m4'
-  | 'dk_hyper_x';
+  | 'nissan_gtr'
+  | 'corvette_z06'
+  | 'porsche_gt3'
+  | 'lotus_evija'
+  | 'amg_gt_bs'
+  | 'audi_r8_v10'
+  | 'ferrari_f8'
+  | 'mclaren_720s'
+  | 'ford_gt'
+  | 'lamborghini_svj'
+  | 'aston_valkyrie'
+  | 'pagani_huayra'
+  | 'bugatti_chiron'
+  | 'dk_hyper_x'
+  | 'koenigsegg_jesko';
 
-export type EngineType = 'v12' | 'w16' | 'v8' | 'flat6' | 'inline6' | 'hybrid_v12';
+export type EngineType =
+  | 'inline6'
+  | 'flat6'
+  | 'v8'
+  | 'v10'
+  | 'v12'
+  | 'w16'
+  | 'twin_turbo'
+  | 'hybrid_v12'
+  | 'electric';
+
+export type CarBodyStyle =
+  | 'coupe'
+  | 'jdm'
+  | 'muscle'
+  | 'rear_engine'
+  | 'ev_hyper'
+  | 'gt_front'
+  | 'mid_v10'
+  | 'mid_v8'
+  | 'track_aero'
+  | 'lemans'
+  | 'wedge_v12'
+  | 'valkyrie'
+  | 'pagani'
+  | 'bugatti'
+  | 'dk_proto'
+  | 'jesko';
+
+export type CarSortMode = 'speed_asc' | 'speed_desc' | 'accel' | 'price' | 'hp';
+
+export interface CarUnlockRule {
+  type: 'free' | 'points' | 'level_or_wins';
+  levelReq?: number;
+  winsReq?: number;
+  label: string;
+}
 
 export type PaintFinish = 'gloss' | 'metallic' | 'matte' | 'chrome';
 export type RimStyle = 'y_spoke' | 'turbine' | 'multi_mesh' | 'carbon_aero' | 'deep_dish';
@@ -15,6 +61,8 @@ export type SpoilerStyle = 'none' | 'lip' | 'gt_wing' | 'swan_neck';
 export type BodyKitStyle = 'stock' | 'sport' | 'track_wide';
 
 export type QualityPreset = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
+export type DifficultySetting = 'easy' | 'normal' | 'hard';
+export type DifficultyTierName = 'Easy' | 'Medium' | 'Hard' | 'Extreme' | 'Insane';
 export type SpeedUnit = 'kmh' | 'mph';
 export type ControlMode = 'buttons' | 'tilt' | 'wheel';
 export type SteeringAssist = 'off' | 'light' | 'full';
@@ -53,13 +101,17 @@ export interface CarSpec {
   id: CarId;
   name: string;
   brand: string;
+  fictionalName: string;
+  fictionalBrand: string;
   tagline: string;
   engineType: EngineType;
   engineLabel: string;
+  bodyStyle: CarBodyStyle;
   price: number;
   defaultColor: string;
   defaultCaliper: string;
   defaultRim: RimStyle;
+  unlockRule: CarUnlockRule;
   isUnlockableHypercar?: boolean;
   unlockLevelReq?: number;
   stats: CarStats;
@@ -124,9 +176,13 @@ export interface LevelConfig {
   laps: number;
   trackLengthMeters: number;
   trackCurviness: number;
+  roadWidth: number;
   rivalCount: number;
-  rivalSkill: number; // 0.65..1.15
+  rivalSkill: number; // difficulty factor ~0.74..1.20
+  difficultyName: DifficultyTierName;
   obstacleCount: number;
+  collisionDamageMult: number;
+  checkpointTimeLimitSec: number | null;
   seed: number;
   baseReward: number;
   description: string;
@@ -179,6 +235,7 @@ export interface HudVisibilityConfig {
 
 export interface GameSettings {
   quality: QualityPreset;
+  difficultySetting: DifficultySetting;
   speedUnit: SpeedUnit;
   hudScale: number; // 0.8 (small) .. 1.0 (medium) .. 1.2 (large)
   hudElements: HudVisibilityConfig;
@@ -290,11 +347,14 @@ export interface RaceTelemetry {
   gear: number; // 0=R, 1..N
   nitro: number; // 0..100
   nitroActive: boolean;
+  slipstreaming: boolean;
+  slipstreamBoostPct: number;
   position: number;
   totalCars: number;
   lap: number;
   totalLaps: number;
   raceTimeSec: number;
+  checkpointTimeLeftSec: number | null;
   bestLapSec: number | null;
   countdown: number; // 3,2,1,0,-1 (running)
   headlightsMode: 0 | 1 | 2; // 0=off, 1=low, 2=high
@@ -353,6 +413,7 @@ export interface RaceResult {
   isNewBestTime: boolean;
   newDamage: CarDamage;
   unlockedNextLevel: boolean;
+  timedOut?: boolean;
   standings: RaceStanding[];
   ghostSamples?: GhostSample[];
   ghostBestTimeSec?: number | null;

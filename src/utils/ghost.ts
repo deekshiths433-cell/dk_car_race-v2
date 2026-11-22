@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { getCarDisplayName } from '../data/brandConfig';
 import { CAR_ORDER, CAR_SPECS } from '../data/cars';
 import { TrackSample } from '../engine/TrackGenerator';
 import {
@@ -54,7 +55,9 @@ export function getPersonalBestGhostConfig(
     carId = bestEntry.carId;
   } else if (bestEntry?.carName) {
     const matched = CAR_ORDER.find(
-      (id) => `${CAR_SPECS[id].brand} ${CAR_SPECS[id].name}` === bestEntry.carName
+      (id) =>
+        `${CAR_SPECS[id].brand} ${CAR_SPECS[id].name}` === bestEntry.carName ||
+        getCarDisplayName(CAR_SPECS[id]) === bestEntry.carName
     );
     if (matched) carId = matched;
   } else if (storedGhost?.carId && CAR_SPECS[storedGhost.carId]) {
@@ -72,7 +75,7 @@ export function getPersonalBestGhostConfig(
   return {
     bestTimeSec,
     carId,
-    carName: bestEntry?.carName ?? `${spec.brand} ${spec.name}`,
+    carName: bestEntry?.carName ?? getCarDisplayName(spec),
     samples,
   };
 }
