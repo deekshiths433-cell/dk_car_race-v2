@@ -55,6 +55,8 @@ export default function App() {
   const raceMountRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<RaceEngine | null>(null);
   const soundRef = useRef<SoundEngine | null>(null);
+  const saveRef = useRef<SaveState>(save);
+  saveRef.current = save;
 
   if (!soundRef.current) {
     soundRef.current = new SoundEngine(save.settings);
@@ -398,31 +400,119 @@ export default function App() {
       {activeModal === 'shop' && (
         <CarShopModal
           save={save}
-          onSelectCar={(carId) => updateSave((prev) => ({ ...prev, selectedCarId: carId }))}
+          onSelectCar={(carId) => {
+            const current = saveRef.current;
+            if (!current.cars[carId]?.owned) {
+              console.error('[DK Car Race][CarShop] Cannot equip unowned car:', { carId });
+              return;
+            }
+            const nextState: SaveState = {
+              ...current,
+              selectedCarId: carId,
+            };
+            const persisted = persistSaveState(nextState);
+            if (!persisted) {
+              console.error('[DK Car Race][CarShop] Failed to save equipped car to localStorage:', {
+                carId,
+              });
+            }
+            saveRef.current = nextState;
+            setSave(nextState);
+          }}
+          onAddPoints={(amount) => {
+            if (!Number.isFinite(amount) || amount <= 0) {
+              console.error('[DK Car Race][CarShop] Invalid points reward amount:', { amount });
+              return;
+            }
+            const current = saveRef.current;
+            const nextState: SaveState = {
+              ...current,
+              points: current.points + Math.round(amount),
+            };
+            const persisted = persistSaveState(nextState);
+            if (!persisted) {
+              console.error('[DK Car Race][CarShop] Failed to persist earned ad points to localStorage.');
+            }
+            saveRef.current = nextState;
+            setSave(nextState);
+          }}
           onBuyCar={(carId) => {
+            const current = saveRef.current;
             const spec = CAR_SPECS[carId];
-            updateSave((prev) => {
-              if (prev.points < spec.price || prev.cars[carId].owned) return prev;
-              const ownedCount = Object.values(prev.cars).filter((c) => c.owned).length + 1;
-              let achBonus = 0;
-              const updatedAch = prev.achievements.map((a) => {
-                if (!a.unlocked && a.id === 'ach_collector' && ownedCount >= 3) {
-                  achBonus += a.reward;
-                  return { ...a, unlocked: true };
-                }
-                return a;
+            if (!spec) {
+              console.error('[DK Car Race][CarShop] Purchase error: Unknown carId.', { carId });
+              return { ok: false, error: 'Car specification not found.' };
+            }
+            const targetCar = current.cars[carId];
+            if (!targetCar) {
+              console.error('[DK Car Race][CarShop] Purchase error: Car entry missing in save state.', {
+                carId,
+              });
+              return { ok: false, error: 'Car save record is missing.' };
+            }
+            if (targetCar.owned) {
+              console.error('[DK Car Race][CarShop] Purchase error: Car already owned.', { carId });
+              return { ok: false, error: 'You already own this car.' };
+            }
+            if (spec.unlockLevelReq && current.highestUnlockedLevel < spec.unlockLevelReq) {
+              console.error('[DK Car Race][CarShop] Purchase error: Level locked.', {
+                carId,
+                requiredLevel: spec.unlockLevelReq,
+                highestUnlockedLevel: current.highestUnlockedLevel,
               });
               return {
-                ...prev,
-                points: prev.points - spec.price + achBonus,
-                selectedCarId: carId,
-                cars: {
-                  ...prev.cars,
-                  [carId]: { ...prev.cars[carId], owned: true },
-                },
-                achievements: updatedAch,
+                ok: false,
+                error: `Reach Level ${spec.unlockLevelReq} to unlock ${spec.name}.`,
               };
+            }
+            if (current.points < spec.price) {
+              const needed = spec.price - current.points;
+              console.error('[DK Car Race][CarShop] Purchase error: Insufficient points.', {
+                carId,
+                price: spec.price,
+                balance: current.points,
+                needed,
+              });
+              return {
+                ok: false,
+                error: `Not enough points. You need ${needed.toLocaleString()} more.`,
+              };
+            }
+
+            const ownedCount = Object.values(current.cars).filter((c) => c.owned).length + 1;
+            let achBonus = 0;
+            const updatedAch = current.achievements.map((a) => {
+              if (!a.unlocked && a.id === 'ach_collector' && ownedCount >= 3) {
+                achBonus += a.reward;
+                return { ...a, unlocked: true };
+              }
+              return a;
             });
+
+            const nextState: SaveState = {
+              ...current,
+              points: current.points - spec.price + achBonus,
+              cars: {
+                ...current.cars,
+                [carId]: { ...targetCar, owned: true },
+              },
+              achievements: updatedAch,
+            };
+
+            const persisted = persistSaveState(nextState);
+            if (!persisted) {
+              console.error('[DK Car Race][CarShop] Failed to save purchased car to localStorage.', {
+                carId,
+              });
+              return {
+                ok: false,
+                error: 'Could not save purchase to local storage. Please free browser storage and retry.',
+              };
+            }
+
+            saveRef.current = nextState;
+            setSave(nextState);
+            return { ok: true };
           }}
           onClose={() => setActiveModal('none')}
         />

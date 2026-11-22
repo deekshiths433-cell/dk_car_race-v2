@@ -337,16 +337,19 @@ export function loadSaveState(): SaveState {
         ? parsed.leaderboard
         : base.leaderboard,
     };
-  } catch {
+  } catch (err) {
+    console.error('[DK Car Race][Storage] Failed to load save state from localStorage:', err);
     return createInitialSaveState();
   }
 }
 
-export function persistSaveState(state: SaveState): void {
+export function persistSaveState(state: SaveState): boolean {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // Ignore storage quota errors cleanly
+    return true;
+  } catch (err) {
+    console.error('[DK Car Race][Storage] Failed to save state to localStorage:', err);
+    return false;
   }
 }
 
